@@ -5989,7 +5989,7 @@
     function panelHTML() {
       var h = '<b style="font-size:17px">Student Diary</b> <span style="opacity:.6">(J to close)</span>';
       h += '<h3>Status</h3><div class="row"><span>Cash</span><span>' + naira(G.cash) + '</span></div><div class="row"><span>Energy</span><span>' + Math.round(G.energy) + '/100</span></div>' +
-        '<div class="row"><span>CGPA</span><span>' + G.cgpa.toFixed(2) + ' / 5.00</span></div><div class="row"><span>Attendance this week</span><span>' + G.wkAtt + '/' + G.wkTot + '</span></div>' +
+        (G.flags.dept ? '<div class="row"><span>Department</span><span style="text-align:right">' + G.flags.dept + '<br><small style="opacity:.7">' + (G.flags.fac || '') + '</small></span></div>' : '') + '<div class="row"><span>CGPA</span><span>' + G.cgpa.toFixed(2) + ' / 5.00</span></div><div class="row"><span>Attendance this week</span><span>' + G.wkAtt + '/' + G.wkTot + '</span></div>' +
         '<div class="row"><span>Time</span><span>' + DAYSF[dayOf(G.t)] + ', week ' + weekOf(G.t) + ', ' + hhmm(minOf(G.t)) + '</span></div>';
       h += '<h3>Timetable</h3><pre style="margin:0;font-family:inherit;white-space:pre-wrap">' + timetableText() + '</pre>';
       h += '<h3>Quests</h3>';
@@ -6662,12 +6662,234 @@
     RX.uberQuote = uberQuote; RX.uberGo = uberGo; RX.uberOpen = uberOpen; RX.openBigMap = openBigMap; RX.closeBigMap = closeBigMap; RX.BM = BM; RX.bmTap = bmTap; RX.bmAct = bmAct; RX.tkOpen = tkOpen; RX.TK = TK; RX.tkSend = tkSend; RX.ownSync = ownSync; RX.dayIdx = dayIdx; RX.qDoneToday = qDoneToday; RX.UB = UB; RX.eatFn = eatFn; RX.suyaDialog = suyaDialog; RX.hotDialog = hotDialog; RX.shawarmaDialog = shawarmaDialog;
     RX.cand = function () { return cand; }; RX.findCandidate = function () { return findCandidate(); }; RX.interact = function () { return interact(); }; RX.QD = QD; RX.cook = function () { return cookMeal(); }; RX.dealer = function () { var s = SPOTS.filter(function (q) { return q.id === 'v_dealer'; })[0]; s.fn(); }; RX.stallSpot = function () { return SPOTS.filter(function (q) { return q.id === 'v_food'; })[0]; }; RX.finishLecture = function (L) { return finishLecture(L); }; RX.beginLecture = function (s) { return beginLecture(s); };
 
+    // =====================================================================================
+    // FACULTY AND DEPARTMENT: every student belongs to one. Real OAU faculties. Class venues for
+    // departmental courses move to your own faculty building. Shown on the home screen and diary.
+    // Department lists are as close to OAU as I know them; edit FACULTIES to correct any name.
+    // Faculty buildings not in the map data are placed near known landmarks (approximate).
+    // =====================================================================================
+    var FACULTIES = [
+      { n: 'Faculty of Technology', lm: 'Faculty of Technology', d: ['Computer Science and Engineering', 'Electrical and Electronics Engineering', 'Mechanical Engineering', 'Civil Engineering', 'Chemical Engineering', 'Materials Science and Engineering', 'Food Science and Technology', 'Agricultural and Environmental Engineering'] },
+      { n: 'Faculty of Science', lm: 'Faculty of Science', near: ['Faculty of Technology', 90, 70], d: ['Mathematics', 'Physics and Engineering Physics', 'Chemistry', 'Botany', 'Zoology', 'Microbiology', 'Geology'] },
+      { n: 'Faculty of Arts', lm: 'Faculty of Arts', d: ['English', 'History', 'Linguistics and African Languages', 'Foreign Languages', 'Dramatic Arts', 'Music', 'Religious Studies'] },
+      { n: 'Faculty of Law', lm: 'Faculty of Law', d: ['Law'] },
+      { n: 'Faculty of Social Sciences', lm: 'Faculty of Social Sciences', d: ['Economics', 'Political Science', 'Psychology', 'Sociology and Anthropology', 'Geography', 'International Relations'] },
+      { n: 'Faculty of Education', lm: 'Faculty of Education', d: ['Educational Foundations and Counselling', 'Curriculum Studies', 'Educational Administration and Planning', 'Arts and Social Science Education', 'Science and Technology Education'] },
+      { n: 'Faculty of Administration', lm: 'Faculty of Administration', d: ['Accounting', 'Business Administration', 'Public Administration', 'Local Government Studies'] },
+      { n: 'Faculty of Pharmacy', lm: 'Faculty of Pharmacy', d: ['Pharmacy'] },
+      { n: 'Faculty of Agriculture', lm: 'Faculty of Agriculture', near: ['Postgraduate College', -80, 90], d: ['Agricultural Economics and Extension', 'Animal Sciences', 'Crop Production and Protection', 'Soil Science and Land Resources'] },
+      { n: 'Faculty of Environmental Design and Management', lm: 'New Faculty of Environmental Design and Management', d: ['Architecture', 'Estate Management', 'Urban and Regional Planning', 'Building', 'Quantity Surveying'] },
+      { n: 'Faculty of Basic Medical Sciences', lm: 'Faculty of Basic Medical Sciences', near: ['OAU Health Centre', 90, -60], d: ['Anatomy', 'Physiology', 'Medical Biochemistry'] },
+      { n: 'Faculty of Clinical Sciences', lm: 'Faculty of Clinical Sciences', near: ['OAU Health Centre', 130, 30], d: ['Medicine and Surgery', 'Nursing Science'] },
+      { n: 'Faculty of Dentistry', lm: 'Faculty of Dentistry', near: ['OAU Health Centre', 90, 90], d: ['Dentistry'] }
+    ];
+    (function () {
+      FACULTIES.forEach(function (f) {
+        if (!LM[f.lm] && f.near && LM[f.near[0]]) {
+          var p = findOpen(LM[f.near[0]][0] + f.near[1], LM[f.near[0]][1] + f.near[2], 3, 120, 14), x = p[0], z = p[1]; LM[f.lm] = [x, z];
+          vbuild(function (a) { var un = unit; fput(a, un('box'), LC(0xe9e4d6), mx(x, 5, z, 24, 10, 12)); fput(a, un('box'), LC(0x1e3a5f), mx(x, 10.4, z, 25, 0.8, 13)); fput(a, un('box'), LC(0x93c5fd), mx(x, 6, z + 6.05, 20, 3, 0.1)); fput(a, un('box'), LC(0x3b2a1a), mx(x, 1.4, z + 6.05, 2.4, 2.8, 0.12)); });
+          boxCollider(x, z, 12, 6); makeLabel(f.n, '', x, 15, z, 700);
+        }
+      });
+    })();
+    function facOf(name) { for (var i = 0; i < FACULTIES.length; i++) if (FACULTIES[i].n === name) return FACULTIES[i]; return null; }
+    function myFac() { return facOf(G.flags.fac); }
+    function deptApply() {
+      var f = myFac(), v = f && LM[f.lm] ? f.lm : 'Faculty of Technology';
+      for (var lv in LEVEL_COURSES) LEVEL_COURSES[lv].forEach(function (c) { if (c._v0 === undefined) c._v0 = c.venue; c.venue = c._v0 === 'Faculty of Technology' ? v : c._v0; });
+      if (f && LM[f.lm]) { LM['My Faculty'] = LM[f.lm]; ALIAS['my faculty'] = 'My Faculty'; ALIAS['faculty'] = 'My Faculty'; ALIAS['my department'] = 'My Faculty'; ALIAS['department'] = 'My Faculty'; }
+    }
+    function deptLabel() { return G.flags.dept ? G.flags.dept + ', ' + (G.flags.fac || '') : 'Not chosen'; }
+    var DP = { el: null };
+    function deptPicker(then) {
+      if (DP.el) return; introOpen = true;
+      var el = document.createElement('div'); DP.el = el; el.id = 'deptpick';
+      el.style.cssText = 'position:fixed;inset:0;z-index:33;display:flex;align-items:center;justify-content:center;background:rgba(5,10,18,.88);color:#fff;font-family:system-ui,sans-serif;padding:12px';
+      el.innerHTML = '<div style="width:min(460px,100%);background:#101826;border:1px solid rgba(255,255,255,.25);border-radius:16px;padding:18px;text-align:left"><h2 style="margin:0 0 6px;color:#ffd166">Your faculty and department</h2><div style="opacity:.8;font-size:14px;margin-bottom:10px">Every OAU student belongs to a faculty and a department. Your classes will hold in your faculty building.</div>' +
+        '<select id="dp-f" style="width:100%;padding:11px;border-radius:10px;background:#0b1220;color:#fff;border:1px solid #556;font-size:16px;margin-bottom:8px">' + FACULTIES.map(function (f) { return '<option>' + f.n + '</option>'; }).join('') + '</select>' +
+        '<select id="dp-d" style="width:100%;padding:11px;border-radius:10px;background:#0b1220;color:#fff;border:1px solid #556;font-size:16px;margin-bottom:10px"></select>' +
+        '<div style="opacity:.7;font-size:12px;margin-bottom:10px">Note: the lecture questions are still mostly Maths, Computer Science and general studies for every department. Department-specific content is coming.</div>' +
+        '<button id="dp-go" style="width:100%;padding:13px;border:0;border-radius:12px;background:#22c55e;color:#04210f;font:bold 17px system-ui,sans-serif;cursor:pointer">Confirm</button></div>';
+      document.body.appendChild(el);
+      var fs = el.querySelector('#dp-f'), ds = el.querySelector('#dp-d');
+      function fillD() { var f = facOf(fs.value); ds.innerHTML = (f ? f.d : []).map(function (d) { return '<option>' + d + '</option>'; }).join(''); }
+      fs.value = G.flags.fac || 'Faculty of Technology'; fillD(); if (G.flags.dept) ds.value = G.flags.dept; fs.addEventListener('change', fillD);
+      el.querySelector('#dp-go').addEventListener('click', function () {
+        G.flags.fac = fs.value; G.flags.dept = ds.value; deptApply(); saveGame(); try { NET.sync(); } catch (e) { /* ignore */ }
+        el.parentNode.removeChild(el); DP.el = null; introOpen = false; show('Welcome to the Department of ' + G.flags.dept + ', ' + G.flags.fac + '.', 5000); if (then) then();
+      });
+    }
+    (function () {
+      var _fi = finishIntro;
+      finishIntro = function () { _fi.apply(null, arguments); setTimeout(function () { if (!G.flags.fac) deptPicker(); }, 700); };
+    })();
+    deptApply();
+    window.IFE_DEPT = { FACULTIES: FACULTIES, pick: deptPicker, apply: deptApply, label: deptLabel };
+
+    // =====================================================================================
+    // HOME SCREEN: title page shown on every load (phone and desktop). Play / Continue,
+    // account sign-in, leaders, how to play, settings. The game world turns slowly behind it.
+    // Optional: set var SUPABASE_GOOGLE = true after enabling Google in Supabase (see SETUP.md).
+    // =====================================================================================
+    var HM = { open: false, el: null, play: null, modal: '', lbKind: 'worth', raf: 0 };
+    (function () {
+      var st = document.createElement('style');
+      st.textContent = [
+        'body.home-on>*{visibility:hidden!important}body.home-on>canvas,body.home-on>#home{visibility:visible!important}',
+        '#home{position:fixed;inset:0;z-index:31;color:#fff;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:linear-gradient(rgba(5,10,18,.55),rgba(5,10,18,.15) 35%,rgba(5,10,18,.7));display:none;overflow:hidden;user-select:none}',
+        '#home *{box-sizing:border-box}',
+        '#home .hm-top{position:absolute;left:0;right:0;top:0;height:56px;display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(10,14,22,.82);border-bottom:3px solid #ffd166}',
+        '#home .hm-chip{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);border-radius:12px;padding:6px 12px;font-weight:800;font-size:18px}',
+        '#home .hm-sp{flex:1}#home .hm-ic{width:40px;height:40px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:20px;cursor:pointer}',
+        '#home .tile{display:flex;align-items:center;gap:10px;background:rgba(14,20,30,.86);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:8px 12px;min-width:170px;cursor:default}',
+        '#home .tile.click{cursor:pointer}#home .tile .ti{width:44px;height:44px;border-radius:10px;background:#f4efe0;display:flex;align-items:center;justify-content:center;font-size:26px;flex:none}',
+        '#home .tile small{display:block;opacity:.7;font-size:12px;font-weight:600}#home .tile b{display:block;font-size:19px;line-height:1.1}',
+        '#home .hm-l,#home .hm-r{position:absolute;top:70px;display:flex;flex-direction:column;gap:10px}#home .hm-l{left:12px}#home .hm-r{right:12px}',
+        '#home .tile.gold{background:linear-gradient(#ffd166,#f59e0b);color:#2b1a00}#home .tile.gold small{opacity:.8}',
+        '#home .hm-mid{position:absolute;left:0;right:0;bottom:18px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:0 14px}',
+        '#home .hm-logo{font-size:clamp(40px,9vw,84px);font-weight:900;letter-spacing:2px;color:#ffd166;text-shadow:0 4px 0 #7c4a03,0 8px 22px rgba(0,0,0,.6);line-height:1}',
+        '#home .hm-sub{opacity:.9;font-weight:700;margin-top:-4px;text-shadow:0 2px 6px rgba(0,0,0,.7)}',
+        '#home .hm-play{width:min(420px,92vw);padding:16px;border:0;border-radius:18px;background:linear-gradient(#34d399,#16a34a);color:#042f1a;font:900 24px system-ui,sans-serif;cursor:pointer;box-shadow:0 5px 0 #0b6b32,0 10px 24px rgba(0,0,0,.5)}',
+        '#home .hm-play:active{transform:translateY(3px);box-shadow:0 2px 0 #0b6b32}#home .hm-play small{display:block;font-size:13px;font-weight:700;opacity:.8}',
+        '#home .hm-row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}',
+        '#home .hm-btn{width:104px;padding:10px 6px;border:0;border-radius:14px;background:#f4efe0;color:#241a0a;font-weight:800;font-size:14px;cursor:pointer;box-shadow:0 3px 0 #b8ab8a}',
+        '#home .hm-btn span{display:block;font-size:26px;margin-bottom:2px}',
+        '#home .hm-foot{opacity:.65;font-size:11px;text-shadow:0 1px 3px #000}',
+        '#hm-modal{position:absolute;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;padding:12px;z-index:2}',
+        '#hm-modal .box2{width:min(460px,100%);max-height:88vh;overflow:auto;background:#101826;border:1px solid rgba(255,255,255,.22);border-radius:16px;padding:16px}',
+        '#hm-modal h2{margin:0 0 8px;color:#ffd166;font-size:22px}#hm-modal input[type=email],#hm-modal input[type=password]{width:100%;padding:11px;margin:5px 0;border-radius:10px;border:1px solid #556;background:#0b1220;color:#fff;font-size:16px}',
+        '#hm-modal .b2{padding:10px 14px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;margin:4px 4px 0 0}#hm-modal .b2.g{background:#16a34a}#hm-modal .b2.x{background:#4b5563}#hm-modal .b2.r{background:#b91c1c}',
+        '#hm-modal .note2{opacity:.8;font-size:13px;margin:6px 0}#hm-modal .err2{color:#fca5a5;font-size:14px;min-height:18px}#hm-modal .ok2{color:#86efac;font-size:14px}',
+        '#hm-modal table{width:100%;border-collapse:collapse;font-size:14px}#hm-modal td{padding:5px 4px;border-bottom:1px solid rgba(255,255,255,.1)}',
+        '#hm-modal kbd{background:#334155;border-radius:5px;padding:1px 6px;font-size:13px}',
+        '@media (max-width:760px){#home .hm-l,#home .hm-r{position:static;flex-direction:row;gap:6px}#home .hm-wrap{position:absolute;top:64px;left:8px;right:8px;display:flex;flex-direction:column;gap:6px}#home .tile{min-width:0;flex:1;padding:6px 8px}#home .tile .ti{width:34px;height:34px;font-size:20px}#home .tile b{font-size:15px}#home .hm-btn{width:92px;font-size:13px}#home .hm-play{font-size:21px;padding:14px}}',
+        '@media (min-width:761px){#home .hm-wrap{display:contents}}'
+      ].join('\n');
+      document.head.appendChild(st);
+    })();
+    function hmDay() { return ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][dayOf(G.t)]; }
+    function hmWeather() { var s = W.state || 'clear'; return { clear: ['☀️', 'Sunny'], cloud: ['⛅', 'Cloudy'], cloudy: ['⛅', 'Cloudy'], rain: ['🌧️', 'Rainy'], storm: ['⛈️', 'Stormy'], harmattan: ['🌫️', 'Harmattan'], hazy: ['🌫️', 'Hazy'] }[s] || ['⛅', s.charAt(0).toUpperCase() + s.slice(1)]; }
+    function hmBuild() {
+      if (HM.el) return;
+      var el = document.createElement('div'); el.id = 'home';
+      el.innerHTML = '<div class="hm-top"><div class="hm-chip">⭐ <span id="hm-aura">0</span></div><div class="hm-chip">🪙 <span id="hm-cash">0</span></div><span class="hm-sp"></span><button class="hm-ic" data-h="settings" title="Settings">⚙</button></div>' +
+        '<div class="hm-wrap"><div class="hm-l"><div class="tile"><div class="ti">🎓</div><div><small>Your CGPA</small><b id="hm-cgpa">-</b></div></div><div class="tile"><div class="ti">🏛️</div><div><small id="hm-fl">Faculty</small><b id="hm-fac" style="font-size:14px">-</b></div></div><div class="tile click" data-h="leaders"><div class="ti">🏆</div><div><small>Leaders</small><b>See all</b></div></div></div>' +
+        '<div class="hm-r"><div class="tile gold"><div class="ti" id="hm-wi">⛅</div><div><small>Today</small><b id="hm-today">...</b></div></div><div class="tile"><div class="ti">👑</div><div><small>SUG president</small><b id="hm-sug">...</b></div></div><div class="tile"><div class="ti">🟢</div><div><small>Students online</small><b id="hm-on">...</b></div></div></div></div>' +
+        '<div class="hm-mid"><div class="hm-logo">IFE LIFE</div><div class="hm-sub">Your OAU story. Real campus. Real players.</div><button class="hm-play" data-h="play" id="hm-play">Play</button>' +
+        '<div class="hm-row"><button class="hm-btn" data-h="account"><span>👤</span>Account</button><button class="hm-btn" data-h="leaders"><span>🏆</span>Leaders</button><button class="hm-btn" data-h="how"><span>🎮</span>How to play</button></div>' +
+        '<div class="hm-foot">Map data © OpenStreetMap contributors</div></div><div id="hm-modal"></div>';
+      document.body.appendChild(el); HM.el = el;
+      el.addEventListener('click', function (e) {
+        var t = e.target; while (t && t !== el && !(t.getAttribute && t.getAttribute('data-h'))) t = t.parentNode; if (!t || t === el) return;
+        var a = t.getAttribute('data-h'); AUD.start(); AUD.click(); hmAct(a, t);
+      });
+      el.querySelector('#hm-modal').addEventListener('click', function (e) { if (e.target.id === 'hm-modal') hmModal(''); });
+    }
+    function hmFill() {
+      var has = !!(G.introDone || NET.serverProfile), nm = G.introDone ? G.name : (NET.serverProfile && NET.serverProfile.username) || '';
+      var pb = document.getElementById('hm-play'); pb.innerHTML = has ? 'Continue<small>as ' + esc(nm) + '</small>' : 'Start your OAU life<small>pick a username and roll your background</small>';
+      document.getElementById('hm-aura').textContent = String(G.introDone ? G.aura : (NET.serverProfile && NET.serverProfile.aura) || 0);
+      document.getElementById('hm-cash').textContent = (G.introDone ? G.cash : (NET.serverProfile && NET.serverProfile.cash) || 0).toLocaleString('en-NG');
+      document.getElementById('hm-cgpa').textContent = (G.introDone ? G.cgpa : (NET.serverProfile && NET.serverProfile.cgpa) || 0) ? Number(G.introDone ? G.cgpa : NET.serverProfile.cgpa).toFixed(2) + ' / 5.00' : '-';
+      var fe = document.getElementById('hm-fac'); if (fe) fe.textContent = G.flags.dept ? G.flags.dept : 'Choose after you start';
+      var w = hmWeather(); document.getElementById('hm-wi').textContent = w[0]; document.getElementById('hm-today').textContent = w[1] + ' ' + hmDay();
+      try { NET.sugState().then(function (s) { var e = document.getElementById('hm-sug'); if (e) e.textContent = s && s.sug ? s.sug : 'None yet'; }, function () { /* ignore */ }); } catch (e1) { /* ignore */ }
+      try { if (NET.mode === 'online' && NET.onlineList) NET.onlineList().then(function (r) { var e = document.getElementById('hm-on'); if (e) e.textContent = Array.isArray(r) ? String(r.length) : '-'; }, function () { /* ignore */ }); else document.getElementById('hm-on').textContent = 'Practice mode'; } catch (e2) { /* ignore */ }
+    }
+    function hmShow(onPlay) {
+      hmBuild(); HM.play = onPlay; HM.open = true; introOpen = true; document.body.classList.add('home-on'); HM.el.style.display = 'block'; hmFill();
+      var last = performance.now();
+      (function spin(now) { if (!HM.open) return; var dt = Math.min(0.1, ((now || performance.now()) - last) / 1000); last = now || performance.now(); yaw += dt * 0.12; if (INT) INT.yaw = yaw; HM.raf = requestAnimationFrame(spin); })();
+    }
+    function hmClose() { HM.open = false; document.body.classList.remove('home-on'); if (HM.el) HM.el.style.display = 'none'; hmModal(''); }
+    function hmModal(html) { var m = document.getElementById('hm-modal'); if (!m) return; HM.modal = html; if (!html) { m.style.display = 'none'; m.innerHTML = ''; return; } m.innerHTML = '<div class="box2">' + html + '</div>'; m.style.display = 'flex'; }
+    function hmAct(a, t) {
+      if (a === 'play') { var fn = HM.play; hmClose(); if (fn) fn(); }
+      else if (a === 'close') hmModal('');
+      else if (a === 'account') hmAccount('');
+      else if (a === 'leaders') hmLeaders();
+      else if (a === 'lb') { HM.lbKind = t.getAttribute('data-k'); hmLeaders(); }
+      else if (a === 'how') hmHow();
+      else if (a === 'settings') hmSettings();
+      else if (a === 'snd') { toggleMuteUI(); hmSettings(); }
+      else if (a === 'gfx') { toggleQuality(); hmSettings(); }
+      else if (a === 'signin') hmSign(false);
+      else if (a === 'create') hmSign(true);
+      else if (a === 'google') hmGoogle();
+      else if (a === 'signout') hmSignOut();
+    }
+    function hmAccount(msg) {
+      if (NET.mode !== 'online') { hmModal('<h2>Account</h2><div class="note2">Online accounts are not switched on in this copy of the game. Your progress is saved in this browser only.</div><button class="b2 x" data-h="close">Close</button>'); return; }
+      hmModal('<h2>Account</h2><div class="note2">Loading...</div>');
+      SB.auth.getUser().then(function (r) {
+        var u = r && r.data && r.data.user, email = u && u.email, h = '<h2>Account</h2>';
+        if (msg) h += '<div class="ok2">' + esc(msg) + '</div>';
+        if (email) h += '<div class="note2">Signed in as <b>' + esc(email) + '</b>. Your progress follows you to any phone or computer.</div><button class="b2 r" data-h="signout">Sign out</button>';
+        else h += '<div class="note2">You are playing as a <b>guest</b>. A guest account is lost if you clear your browser data. Save it with an email, or sign in to an account you already made.</div><button class="b2 g" data-h="create">Save my account (email)</button><button class="b2" data-h="signin">Sign in</button>' + (typeof SUPABASE_GOOGLE !== 'undefined' && SUPABASE_GOOGLE ? '<button class="b2 x" data-h="google">Continue with Google</button>' : '');
+        hmModal(h + '<div style="margin-top:10px"><button class="b2 x" data-h="close">Close</button></div>');
+      }, function () { hmModal('<h2>Account</h2><div class="err2">Could not reach the server.</div><button class="b2 x" data-h="close">Close</button>'); });
+    }
+    function hmSign(create) {
+      hmModal('<h2>' + (create ? 'Save my account' : 'Sign in') + '</h2><div class="note2">' + (create ? 'Add an email and password to your current guest account. We send a link to confirm the email.' : 'Use the email and password of your saved account. This replaces the guest progress in this browser.') + '</div>' +
+        '<input id="hm-em" type="email" placeholder="email" autocomplete="email"><input id="hm-pw" type="password" placeholder="password (8+ characters)" autocomplete="' + (create ? 'new-password' : 'current-password') + '"><div class="err2" id="hm-err"></div>' +
+        '<button class="b2 g" id="hm-go">' + (create ? 'Save account' : 'Sign in') + '</button><button class="b2 x" data-h="account">Back</button>');
+      ['hm-em', 'hm-pw'].forEach(function (id) { var i = document.getElementById(id); ['keydown', 'keyup', 'keypress'].forEach(function (ev) { i.addEventListener(ev, function (e) { e.stopPropagation(); if (ev === 'keydown' && e.key === 'Enter') go(); }); }); });
+      var busy = false;
+      function go() {
+        if (busy) return; var em = document.getElementById('hm-em').value.trim(), pw = document.getElementById('hm-pw').value, err = document.getElementById('hm-err');
+        if (!/^\S+@\S+\.\S+$/.test(em)) { err.textContent = 'Enter a valid email.'; return; } if (pw.length < 8) { err.textContent = 'Password needs 8 or more characters.'; return; }
+        busy = true; err.textContent = 'Working...';
+        (create ? NET.upgrade(em, pw) : NET.login(em, pw)).then(function (r) { busy = false; if (r && r.ok) { if (create) hmAccount(r.note || 'Check your email to confirm.'); } else err.textContent = (r && r.error) || 'Could not do that.'; }, function () { busy = false; err.textContent = 'Network error.'; });
+      }
+      document.getElementById('hm-go').addEventListener('click', go);
+    }
+    function hmGoogle() { try { SB.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } }); } catch (e) { hmAccount('Google sign-in is not set up yet.'); } }
+    function hmSignOut() {
+      if (!confirm('Sign out? Make sure you saved your account with an email, or you will lose this character.')) return;
+      SB.auth.signOut().then(function () { try { localStorage.removeItem(SAVE2); } catch (e) { /* ignore */ } location.reload(); }, function () { location.reload(); });
+    }
+    function hmLeaders() {
+      var kinds = [['worth', 'Net worth'], ['aura', 'Aura'], ['weekly', 'This week']];
+      hmModal('<h2>Leaders</h2><div>' + kinds.map(function (k) { return '<button class="b2 ' + (k[0] === HM.lbKind ? 'g' : 'x') + '" data-h="lb" data-k="' + k[0] + '">' + k[1] + '</button>'; }).join('') + '</div><div id="hm-lb" class="note2">Loading...</div><button class="b2 x" data-h="close" style="margin-top:8px">Close</button>');
+      NET.leaderboard(HM.lbKind).then(function (rows) {
+        var e = document.getElementById('hm-lb'); if (!e) return;
+        e.innerHTML = rows.length ? '<table>' + rows.slice(0, 15).map(function (r, i) { return '<tr><td>' + (i + 1) + '</td><td>' + esc(r.name) + (r.me ? ' (you)' : '') + '</td><td style="text-align:right">' + (HM.lbKind === 'aura' ? r.value : naira(r.value)) + '</td></tr>'; }).join('') + '</table>' : 'No scores yet. Be the first.';
+      }, function () { var e = document.getElementById('hm-lb'); if (e) e.textContent = 'Could not load.'; });
+    }
+    function hmHow() {
+      hmModal('<h2>How to play</h2><div class="note2"><b>Computer</b><br><kbd>W A S D</kbd> move &nbsp; <kbd>Shift</kbd> run &nbsp; <kbd>E</kbd> act / talk &nbsp; <kbd>Enter</kbd> type a command (try "uber to library")<br><kbd>G</kbd> big map &nbsp; <kbd>J</kbd> phone &nbsp; <kbd>T</kbd> change route &nbsp; <kbd>V</kbd> camera &nbsp; <kbd>H</kbd> horn &nbsp; <kbd>Q</kbd> graphics &nbsp; <kbd>M</kbd> sound</div>' +
+        '<div class="note2"><b>Phone</b><br>Left stick moves. ACT does what the prompt says. The ☰ button opens the command box. Tap the small map for the big map.</div>' +
+        '<div class="note2"><b>Your goal</b><br>Go to class early, sit in front, eat, cook, earn money, pay your rent, make friends, and save for your own keke.</div><button class="b2 x" data-h="close">Close</button>');
+    }
+    function hmSettings() {
+      var snd = document.getElementById('mute') ? document.getElementById('mute').textContent.replace(/\s*\(M\)/, '') : 'Sound', gfx = document.getElementById('qbtn') ? document.getElementById('qbtn').textContent.replace(/\s*\(Q\)/, '') : 'Graphics';
+      hmModal('<h2>Settings</h2><button class="b2" data-h="snd">' + esc(snd) + '</button><button class="b2" data-h="gfx">' + esc(gfx) + '</button><div class="note2">Use Low graphics on older phones. Settings are remembered on this device.</div><button class="b2 x" data-h="close">Close</button>');
+    }
+    window.IFE_HOME = { show: hmShow, close: hmClose, state: function () { return HM; }, act: hmAct };
+
 
     // ---------- input ----------
     var keys = {}, touch = { f: 0, b: 0, l: 0, r: 0, cl: 0, cr: 0, run: 0 };
     var cityOcc = 1, yaw = 0, camDist = 9, dragT = -9, camMode = 'city', cityDist = 46;
-    try { if (localStorage.getItem('ifelife_cam') === 'chase') camMode = 'chase'; } catch (e) { /* ignore */ }
-    function toggleCam() { camMode = camMode === 'city' ? 'chase' : 'city'; try { localStorage.setItem('ifelife_cam', camMode); } catch (e) { /* ignore */ } show(camMode === 'city' ? 'City view' : 'Close-up view', 1800); }
+    var CAMS = [['city', 'City view'], ['wide', 'Wide overview'], ['low', 'Low angle, see ahead'], ['follow', 'Follow, behind you'], ['front', 'Face view'], ['fpv', 'First person']];
+    var camStyle = 'city', camPitch = 0.95, camLead = 0, camPX = 0, camPZ = 0, camMv = 0, fpvHid = false;
+    try { var cs0 = localStorage.getItem('ifelife_cam2'); if (cs0 && CAMS.some(function (c) { return c[0] === cs0; })) camStyle = cs0; } catch (e) { /* ignore */ }
+    function camName() { for (var i = 0; i < CAMS.length; i++) if (CAMS[i][0] === camStyle) return CAMS[i][1]; return ''; }
+    function camApply() { camMode = (camStyle === 'city' || camStyle === 'wide' || camStyle === 'low') ? 'city' : 'chase'; var el = document.getElementById('cambtn'); if (el) el.textContent = 'Camera: ' + camName(); }
+    function toggleCam(dir) {
+      var i = 0; for (; i < CAMS.length; i++) if (CAMS[i][0] === camStyle) break;
+      camStyle = CAMS[(i + (dir || 1) + CAMS.length) % CAMS.length][0]; camApply();
+      if (camStyle === 'front') yaw = player.rot; else if (camStyle === 'follow') yaw = player.rot + Math.PI;
+      try { localStorage.setItem('ifelife_cam2', camStyle); } catch (e) { /* ignore */ }
+      show('Camera: ' + camName() + '. V changes it. C puts it behind you.', 2400);
+    }
+    (function () {
+      var b = document.createElement('div'); b.id = 'cambtn'; b.className = 'box'; b.style.cssText = 'position:fixed;left:50%;top:88px;transform:translateX(-50%);font-size:12px;cursor:pointer;opacity:.8;z-index:6;padding:3px 9px'; b.addEventListener('click', function () { AUD.start(); toggleCam(); }); document.body.appendChild(b);
+      var st = document.createElement('style'); st.textContent = '.touch #cambtn{left:auto;right:10px;top:96px;transform:none;font-size:11px}#p-cam{right:28px;bottom:218px;font-size:20px}'; document.head.appendChild(st);
+      if (isTouch) { var pc = document.createElement('div'); pc.className = 'pad'; pc.id = 'p-cam'; pc.style.cssText = 'position:fixed;display:flex'; pc.textContent = '\ud83d\udcf7'; pc.addEventListener('pointerdown', function (e) { e.preventDefault(); AUD.start(); toggleCam(); }); document.body.appendChild(pc); }
+      camApply();
+    })();
+    function camBehind() { yaw = player.rot + Math.PI; dragT = -9; show('Camera behind you', 1200); }
     function doHorn() { if (!drv) return; AUD.horn(drv && drv.v.kind === 'okada' ? 'okada' : 'car'); if (drv) drv.v.hornT = 0.3; }
     function resetGame() {
       if (confirm('Reset all progress and start Monday again?')) {
@@ -6699,7 +6921,8 @@
         else if (e.code === 'KeyP') togglePanel('chat');
         else if (e.code === 'KeyF') togglePanel('flex');
         else if (e.code === 'KeyT') cycleTrack();
-        else if (e.code === 'KeyV') toggleCam();
+        else if (e.code === 'KeyV') toggleCam(e.shiftKey ? -1 : 1);
+        else if (e.code === 'KeyC') camBehind();
         else if (e.code === 'KeyM') toggleMuteUI();
         else if (e.code === 'KeyR') resetGame();
         else if (e.code === 'KeyQ') toggleQuality();
@@ -6721,9 +6944,9 @@
     document.getElementById('p-menu').addEventListener('pointerdown', function (e) { e.preventDefault(); AUD.start(); togglePanel(); });
     document.getElementById('p-horn').addEventListener('pointerdown', function (e) { e.preventDefault(); AUD.start(); doHorn(); });
     var drag = null;
-    renderer.domElement.addEventListener('pointerdown', function (e) { AUD.start(); drag = { id: e.pointerId, x: e.clientX }; });
+    renderer.domElement.addEventListener('pointerdown', function (e) { AUD.start(); drag = { id: e.pointerId, x: e.clientX, y: e.clientY }; });
     window.addEventListener('pointermove', function (e) {
-      if (drag && e.pointerId === drag.id) { yaw -= (e.clientX - drag.x) * 0.006; drag.x = e.clientX; dragT = performance.now() / 1000; }
+      if (drag && e.pointerId === drag.id) { yaw -= (e.clientX - drag.x) * 0.006; drag.x = e.clientX; if (!INT && camStyle === 'city') camPitch = Math.max(0.4, Math.min(1.42, camPitch + (e.clientY - drag.y) * 0.004)); drag.y = e.clientY; dragT = performance.now() / 1000; }
     });
     window.addEventListener('pointerup', function (e) { if (drag && e.pointerId === drag.id) drag = null; });
     window.addEventListener('wheel', function (e) {
@@ -6886,10 +7109,13 @@
       if (!paused) updateVehicles(dt);
 
       // ---- camera ----
+      camMv = Math.hypot(player.x - camPX, player.z - camPZ) / Math.max(dt, 0.001); camPX = player.x; camPZ = player.z; if (camMv > 40) camMv = 0;
+      camLead += ((camMv > 0.6 && !INT ? 1 : 0) - camLead) * Math.min(1, dt * 1.4);
+      var fwx = Math.sin(player.rot), fwz = Math.cos(player.rot), ldx = 0, ldz = 0;
       var sp2 = drv ? VSPEC[drv.v.kind] : null, city = camMode === 'city' || !!INT, cx2, cz2, height, ty;
       CITYS = city ? CITYK : 1;
       if (city) {
-        var cdist = INT ? INT.camDist : cityDist * (drv ? 1.15 : 1), pitch = INT ? 0.9 : 0.95;
+        var cdist = INT ? INT.camDist : cityDist * (drv ? 1.15 : 1) * (camStyle === 'wide' ? 1.6 : (camStyle === 'low' ? 0.75 : 1)), pitch = INT ? 0.9 : (camStyle === 'wide' ? 1.32 : (camStyle === 'low' ? 0.5 : camPitch));
         if (INT) yaw = INT.yaw;
         var hz0 = Math.cos(pitch) * cdist, hs0 = Math.sin(pitch) * cdist, occ = 1;
         if (!INT) {                                  // pull the camera in when a building sits between it and the player
@@ -6900,9 +7126,11 @@
         } else cityOcc = 1;
         var ot = (1 - cityOcc) / 0.7, pe = pitch + (1.42 - pitch) * ot, cd2 = cdist * (1 - 0.25 * ot);
         var hz = Math.cos(pe) * cd2; height = Math.sin(pe) * cd2; camEff = cd2; ty = 0.6;
-        cx2 = player.x + Math.sin(yaw) * hz; cz2 = player.z + Math.cos(yaw) * hz;
+        var ld = camLead * cd2 * (camStyle === 'low' ? 0.38 : 0.18); ldx = fwx * ld; ldz = fwz * ld;
+        cx2 = player.x + ldx + Math.sin(yaw) * hz; cz2 = player.z + ldz + Math.cos(yaw) * hz;
       } else {
-        var dist = drv ? sp2.camBack : camDist;
+        var dist = drv ? sp2.camBack : (camStyle === 'front' ? 6 : camDist);
+        if (camStyle === 'front' && !drv && camMv < 0.3 && now / 1000 - dragT > 1.2) yaw = lerpAngle(yaw, player.rot, Math.min(1, dt * 2));
         if (drv && Math.abs(drv.speed) > 2 && now / 1000 - dragT > 1.5) yaw = lerpAngle(yaw, drv.v.rot + (drv.speed < 0 ? 0 : Math.PI), Math.min(1, dt * 1.6));
         var eff = dist;
         for (var cs = 2; cs <= dist; cs += 1) {
@@ -6912,15 +7140,18 @@
         if (eff < camEff) camEff = eff;
         height = Math.max(drv ? 2.6 : 2.2, camEff * (drv ? 0.42 : 0.6));
         cx2 = player.x + Math.sin(yaw) * camEff; cz2 = player.z + Math.cos(yaw) * camEff; ty = drv ? (drv.v.kind === 'okada' ? 1.2 : 1.6) : 1.3;
+        if (camStyle === 'fpv') { cx2 = player.x; cz2 = player.z; height = drv ? (drv.v.kind === 'okada' ? 1.55 : 1.45) : 1.62; ty = height - 0.1; ldx = -Math.sin(yaw) * 10; ldz = -Math.cos(yaw) * 10; }
+        else if (camStyle === 'follow') { var ld2 = camLead * 4; ldx = fwx * ld2; ldz = fwz * ld2; }
       }
+      var wantHide = camStyle === 'fpv' && !INT; if (wantHide) { player.group.visible = false; fpvHid = true; } else if (fpvHid) { fpvHid = false; player.group.visible = !(drv && drv.v.kind !== 'okada'); }
       if (Math.abs(camPos.x - cx2) + Math.abs(camPos.z - cz2) > 70) { camPos.x = cx2; camPos.y = height; camPos.z = cz2; }
       var k = 1 - Math.exp(-dt * (city ? 5 : 6));
       camPos.x += (cx2 - camPos.x) * k; camPos.y += (height - camPos.y) * k; camPos.z += (cz2 - camPos.z) * k;
       camera.position.copy(camPos);
       if (shakeAmp > 0) { camera.position.x += (Math.random() - 0.5) * shakeAmp; camera.position.y += (Math.random() - 0.5) * shakeAmp * 0.6; }
-      camTarget.set(player.x, ty, player.z);
+      camTarget.set(player.x + ldx, ty, player.z + ldz);
       camera.lookAt(camTarget);
-      var fovT = city ? (INT ? 42 : 38) : 60 + (drv ? 14 * Math.min(1, Math.abs(drv.speed) / sp2.max) : 0);
+      var fovT = city ? (INT ? 42 : 38) : (camStyle === 'fpv' ? 74 : 60) + (drv ? 14 * Math.min(1, Math.abs(drv.speed) / sp2.max) : 0);
       if (Math.abs(camera.fov - fovT) > 0.1) { camera.fov += (fovT - camera.fov) * Math.min(1, dt * 4); camera.updateProjectionMatrix(); }
       playerRing.visible = !drv && !introOpen; playerRing.position.set(player.x, 0.09, player.z); playerRing.scale.setScalar(city ? 1.5 : 1);
       if (!drv) player.group.scale.setScalar(city ? CITYK : 1);
@@ -7037,17 +7268,21 @@
     }
 
     buildPins();
-    if (!G.introDone) { introOpen = true; }
-    NET.init().then(function () {
+    introOpen = true;
+    function bootGame() {
+      if (G.introDone) introOpen = false;
+      var _dpk = function () { deptApply(); if (G.introDone && !G.flags.fac) deptPicker(); };
       if (NET.serverProfile && !G.introDone && NET.applyServerProfile()) {
         introOpen = false; rebuildPlayer(G.female); if (G.home) { var h0 = homeById(G.home.id), o0 = findOpen(h0.x + 5, h0.z + 5, 2, 40, 1); player.x = o0[0]; player.z = o0[1]; }
-        show('Welcome back, ' + G.name + '.', 4000);
+        show('Welcome back, ' + G.name + '.', 4000); _dpk();
       } else if (!G.introDone) showIntro();
-      else { if (G.female) rebuildPlayer(true); show('Welcome back, ' + (G.name || 'student') + '. ' + clockText() + '. Press J for your phone.', 4500); NET.refreshPolicy(); }
-    }, function () { if (!G.introDone) showIntro(); });
+      else { if (G.female) rebuildPlayer(true); show('Welcome back, ' + (G.name || 'student') + '. ' + clockText() + '. Press J for your phone.', 4500); NET.refreshPolicy(); _dpk(); }
+    }
+    var skipHome = /[?&]nohome\b/.test(location.search);
+    NET.init().then(function () { if (skipHome) bootGame(); else hmShow(bootGame); }, function () { if (skipHome) { if (!G.introDone) showIntro(); else introOpen = false; } else hmShow(function () { if (!G.introDone) showIntro(); else introOpen = false; }); });
     pickWeather(); W.ov = W.ovT; W.rain = W.rainT;
     var streakMsg = dailyStreak(); if (streakMsg) setTimeout(function () { banner('Daily allowance', streakMsg); AUD.coin(); }, 3500);
-    window.IFE_DEBUG = { ridex: function () { return RX; }, trade: function () { return { PT: PT, ptApply: ptApply, ptEnterVisit: ptEnterVisit, peopleHTML: peopleHTML, tradeTick: tradeTick, ptClaim: ptClaim, ptSetCash: ptSetCash, ptRedraw: ptRedraw, ptStash: ptStash, setNet: function (m) { NET.mode = m; } }; }, voice: function () { return { VEH: VEH, VT: VT, VPLACE: VPLACE, EV: EV, SOUND_FILES: SOUND_FILES, matchOn: matchOn(), serviceOn: serviceOn(), callOn: callOn(), voiceTick: voiceTick, evSpawn: evSpawn, evTick: evTick, marketDialog: marketDialog, chapelDialog: chapelDialog, mosqueDialog: mosqueDialog, sportsDialog: sportsDialog, VOX: VOX }; }, AGENTS: AGENTS, crowdStats: function () { return { active: activeCount, drawn: drawnCount, total: CROWD_N }; }, COINS: COINS, startMG: startMG, mgState: function () { return mg; }, mgPress: mgPress, mgChoose: mgChoose, runMG: runMG, NET: NET, CLASSES: CLASSES, FURN: FURN, HOMES: HOMES, homeDialog: homeDialog, jobGate: jobGate, startExam: startExam, finishIntro: function (n, f, c, o, lv) { return finishIntro(n, f, c, o, lv); }, HALLS: HALLS, allocateHome: allocateHome, roomResidents: roomResidents, goCorridor: goCorridor, hallGate: hallGate, hallOf: hallOf, homeById: homeById, enterOwnRoom: enterOwnRoom, knockRoom: knockRoom, blockOf: blockOf, SLV: SLV, COURSES: COURSES, orientLeft: orientLeft, taskDialog: taskDialog, hallEligible: hallEligible, pending: function () { return PENDING; }, polMul: polMul, isExamWeek: isExamWeek, evActive: evActive, evNext: evNext, attendEvent: attendEvent, worthNow: worthNow, POLICIES: POLICIES, sessionsFor: sessionsFor, drawQs: drawQs, rollClassLocal: rollClassLocal, comfortScore: comfortScore, powered: powered, needsTick: needsTick, doSleep: doSleep, sellFurn: sellFurn, rentOf: rentOf, mySpot: mySpot, barred: barred, QB: QB, phone: function () { return { tab: phoneTab, open: panelOpen }; }, closePhone: closePhone, jobSpots: function () { return SPOTS.filter(function (s) { return s.type === 'job'; }); }, flushNet: function () { return NET.flush(); }, introOpen: function () { return introOpen; }, buyFurn: buyFurn, placeFurn: placeFurn, allowance: allowance, housekeeping: housekeeping, openPhone: openPhone, flexCanvas: function () { return flexCanvas(); }, ACH: ACH, player: player, spots: SPOTS, col: COL, tryInteract: interact, chunks: chunkList,
+    window.IFE_DEBUG = { camx: function () { return { set: function (n) { camStyle = n; camApply(); }, exit: function () { if (INT) exitInterior(); }, tp: function (x, z) { player.x = x; player.z = z; }, yaw: function (y) { yaw = y; } }; }, ridex: function () { return RX; }, trade: function () { return { PT: PT, ptApply: ptApply, ptEnterVisit: ptEnterVisit, peopleHTML: peopleHTML, tradeTick: tradeTick, ptClaim: ptClaim, ptSetCash: ptSetCash, ptRedraw: ptRedraw, ptStash: ptStash, setNet: function (m) { NET.mode = m; } }; }, voice: function () { return { VEH: VEH, VT: VT, VPLACE: VPLACE, EV: EV, SOUND_FILES: SOUND_FILES, matchOn: matchOn(), serviceOn: serviceOn(), callOn: callOn(), voiceTick: voiceTick, evSpawn: evSpawn, evTick: evTick, marketDialog: marketDialog, chapelDialog: chapelDialog, mosqueDialog: mosqueDialog, sportsDialog: sportsDialog, VOX: VOX }; }, AGENTS: AGENTS, crowdStats: function () { return { active: activeCount, drawn: drawnCount, total: CROWD_N }; }, COINS: COINS, startMG: startMG, mgState: function () { return mg; }, mgPress: mgPress, mgChoose: mgChoose, runMG: runMG, NET: NET, CLASSES: CLASSES, FURN: FURN, HOMES: HOMES, homeDialog: homeDialog, jobGate: jobGate, startExam: startExam, finishIntro: function (n, f, c, o, lv) { return finishIntro(n, f, c, o, lv); }, HALLS: HALLS, allocateHome: allocateHome, roomResidents: roomResidents, goCorridor: goCorridor, hallGate: hallGate, hallOf: hallOf, homeById: homeById, enterOwnRoom: enterOwnRoom, knockRoom: knockRoom, blockOf: blockOf, SLV: SLV, COURSES: COURSES, orientLeft: orientLeft, taskDialog: taskDialog, hallEligible: hallEligible, pending: function () { return PENDING; }, polMul: polMul, isExamWeek: isExamWeek, evActive: evActive, evNext: evNext, attendEvent: attendEvent, worthNow: worthNow, POLICIES: POLICIES, sessionsFor: sessionsFor, drawQs: drawQs, rollClassLocal: rollClassLocal, comfortScore: comfortScore, powered: powered, needsTick: needsTick, doSleep: doSleep, sellFurn: sellFurn, rentOf: rentOf, mySpot: mySpot, barred: barred, QB: QB, phone: function () { return { tab: phoneTab, open: panelOpen }; }, closePhone: closePhone, jobSpots: function () { return SPOTS.filter(function (s) { return s.type === 'job'; }); }, flushNet: function () { return NET.flush(); }, introOpen: function () { return introOpen; }, buyFurn: buyFurn, placeFurn: placeFurn, allowance: allowance, housekeeping: housekeeping, openPhone: openPhone, flexCanvas: function () { return flexCanvas(); }, ACH: ACH, player: player, spots: SPOTS, col: COL, tryInteract: interact, chunks: chunkList,
       LM: LM, state: function () { return { cash: G.cash, energy: G.energy }; }, G: G, W: W, DL: DL, TALK: TALK, QD: QD, npcs: npcs, labels: labels,
       setYaw: function (v) { yaw = v; }, setCam: function (v) { camDist = v; }, setCity: function (v) { cityDist = v; }, veh: VEH, scene: scene, renderer: renderer, camera: camera, inBuilding: inBuilding,
       close: closeDlg, enter: enterVehicle, exit: exitVehicle, drv: function () { return drv; }, pick: pickChoice, openDlg: openDlg, advance: advanceDlg, setWeather: setWeather, nextSession: nextSession, startLecture: startLecture,
