@@ -1209,7 +1209,7 @@
     }
     var MOVERS = [];
     (function () {
-      var vrand = rng(99), parked = 0, movers = 0;
+      var vrand = rng(99), parked = 0, movers = 0, NEARC = [[-150, -2450], [-872, -2598], [0, 0]];
       var roads = D.roads.filter(function (r) { return r[0] <= 3; });
       roads.forEach(function (r, ri) {
         var t = r[0], w = ROADW[t] / 2, npts = (r.length - 1) / 2, pts = [], total = 0, i;
@@ -1235,14 +1235,37 @@
           }
           run += len;
         }
-        // moving traffic on longer main roads
-        if (total > 140 && movers < 16 && t <= 2 && vrand() < 0.6) {
+        // far traffic on the long main roads
+        if (total > 140 && movers < 12 && t <= 2 && vrand() < 0.6) {
           var kr2 = vrand(), kind2 = kr2 < 0.3 ? 'okada' : (kr2 < 0.55 ? 'danfo' : (kr2 < 0.65 ? 'bus' : 'sedan'));
           var v = addVehicle(kind2, pts[0][0], pts[0][1], 0, true);
           MOVERS.push({ v: v, path: pts, i: 1, dir: 1, cx: pts[0][0], cz: pts[0][1], hx: 0, hz: 1, speed: 6 + vrand() * 6, off: Math.min(2.6, w * 0.45), offCur: Math.min(2.6, w * 0.45) });
           movers++;
         }
       });
+      // busy streets around the hostels, campus and gate: kekes, shuttles, minibuses
+      (function () {
+        var cand = [];
+        D.roads.forEach(function (r) {
+          if (r[0] > 5) return; var np = (r.length - 1) / 2, tl = 0, q = [], i;
+          for (i = 0; i < np; i++) q.push([r[1 + 2 * i] / 10, r[2 + 2 * i] / 10]);
+          for (i = 0; i < np - 1; i++) tl += Math.hypot(q[i + 1][0] - q[i][0], q[i + 1][1] - q[i][1]);
+          if (tl < 60) return;
+          var dm = NEARC.map(function (c) { var m = 1e9; q.forEach(function (pp) { var d = Math.hypot(pp[0] - c[0], pp[1] - c[1]); if (d < m) m = d; }); return m; });
+          cand.push({ r: r, q: q, tl: tl, dm: dm });
+        });
+        var used = [];
+        [[1, 16], [0, 12], [2, 6]].forEach(function (pr) {
+          cand.filter(function (c) { return used.indexOf(c) < 0 && c.dm[pr[0]] < 700; }).sort(function (a, b) { return a.dm[pr[0]] - b.dm[pr[0]]; }).slice(0, pr[1]).forEach(function (c) { used.push(c); });
+        });
+        used.forEach(function (c) {
+          var t = c.r[0], w = ROADW[t] / 2, pts = c.q, kr = vrand();
+          var kind = t >= 5 ? 'okada' : (kr < 0.5 ? 'okada' : (kr < 0.75 ? 'danfo' : (kr < 0.9 ? 'bus' : 'sedan')));
+          var si = Math.min(pts.length - 2, Math.floor(vrand() * (pts.length - 1)));
+          var v = addVehicle(kind, pts[si][0], pts[si][1], 0, true);
+          MOVERS.push({ v: v, path: pts, i: si + 1, dir: 1, cx: pts[si][0], cz: pts[si][1], hx: 0, hz: 1, speed: 5 + vrand() * 5, off: Math.min(1.8, w * 0.4), offCur: Math.min(1.8, w * 0.4) });
+        });
+      })();
       // okada park: a few bikes around the spot
       var op = D.spots.okada, bikes = 0;
       for (var k = 0; k < 30 && bikes < 6; k++) {
@@ -2393,7 +2416,7 @@
           return Nd('Your room at ' + h.name + '.\nRent: ' + naira(rentOf(h)) + ' every Saturday.' + (arrears ? '\nYou owe ' + naira(arrears) + ' in arrears!' : '') + '\nComfort ' + comfortScore() + (powered() ? '' : ' (no light!)'), [
             C(tired ? 'Sleep until morning' : 'Sleep (not tired yet)', function () { if (!tired) return Nd('You are not tired enough to sleep.', [C('Ok', hub)]); doSleep(); return null; }),
             C('Furnish my room', function () { openPhone('room'); return null; }),
-            C('Cook a meal (₦' + Math.round(400 * polMul('food')) + ')', function () { if (!cookMeal()) return Nd('You cannot cook that right now.', [C('Ok', hub)]); show('You cooked and ate. +40 hunger.', 3000); return null; }, function () { return hasPowered('cooker'); }),
+            C('Cook a meal (' + ((G.flags.stock | 0) > 0 ? 'your foodstuff, ' + (G.flags.stock | 0) + ' left' : '₦' + Math.round(400 * polMul('food'))) + ')', function () { if (!cookMeal()) return Nd('You cannot cook that right now.', [C('Ok', hub)]); show('You cooked and ate. +40 hunger.', 3000); return null; }, function () { return hasPowered('cooker'); }),
             C('Pay arrears (' + naira(arrears) + ')', function () { if (G.cash < arrears) return Nd('You do not have that much.', [C('Ok', hub)]); spend('rent', arrears); G.home.arrears = 0; AUD.coin(); return Nd('Cleared. The landlord smiles.', [C('Ok', hub)]); }, function () { return arrears > 0; }),
             C('Move out', function () { return Nd('Move out of ' + h.name + '? Your furniture goes into storage.', [C('Yes, move out', function () { G.home = null; G.placed = []; show('You moved out.', 2500); return null; }), C('No', hub)]); }),
             C('Leave', null)
@@ -3495,8 +3518,14 @@
           }
         });
       }
-      R.seat = { x: seatPlayer.x, z: seatPlayer.z + 0.2 }; var mk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.04, 16), new THREE.MeshBasicMaterial({ color: 0xffd23f, toneMapped: false })); mk.position.set(R.seat.x, 0.55, R.seat.z + 0.1); g.add(mk);
-      ispot(R, R.seat.x, R.seat.z + 1.8, opt.ses ? (opt.ses.exam ? 'Sit down to write the exam' : 'Sit down for ' + code) : 'Sit and rest (30 min)', function () { sitDown(); });
+      R.seat = { x: seatPlayer.x, z: seatPlayer.z + 0.2 }; R.seatF = { x: seatPlayer.x, z: oz - 2.6 + 0.2 }; R.seatB = { x: seatPlayer.x, z: oz + 9.4 + 0.2 };
+      [R.seatF, R.seat, R.seatB].forEach(function (sp, si) { var mk = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.04, 16), new THREE.MeshBasicMaterial({ color: si === 0 ? 0x4ade80 : (si === 1 ? 0xffd23f : 0xf97316), toneMapped: false })); mk.position.set(sp.x, 0.55, sp.z + 0.1); g.add(mk); });
+      var sitLab = opt.ses ? (opt.ses.exam ? 'write the exam' : code) : '';
+      if (opt.ses) {
+        ispot(R, R.seatF.x, R.seatF.z + 1.8, 'Sit on the FIRST ROW for ' + sitLab, function () { sitDown('f'); });
+        ispot(R, R.seat.x, R.seat.z + 1.8, 'Sit in the middle for ' + sitLab, function () { sitDown('m'); });
+        ispot(R, R.seatB.x, R.seatB.z + 1.8, 'Sit at the BACK for ' + sitLab, function () { sitDown('b'); });
+      } else ispot(R, R.seat.x, R.seat.z + 1.8, 'Sit and rest (30 min)', function () { sitDown('m'); });
       ispot(R, ox + 2, oz - R.D / 2 + 5.6, 'Talk to the lecturer', function () { lecturerTalk(); }, 2.6);
       R.opt = opt; R.crowd = 0.4; return R;
     }
@@ -3506,8 +3535,9 @@
       openDlg(lecName(ses), Nd(ses ? '"Take your seat when you are ready. We start on time."' : '"The hall is free now. Are you looking for me?"', [
         C('Ask for extra reading', function () { return Nd('"Go to the library, shelf for ' + (ses ? ses.c.code : 'your course') + '. Read before you come back."', [C('Thank you, sir', null)]); }), C('Nothing, sir', null)]), 11);
     }
-    function sitDown() {
+    function sitDown(which) {
       var R = INT, ses = R.opt.ses;
+      R.sat = which || 'm'; if (R.sat === 'f' && R.seatF) R.seat = R.seatF; else if (R.sat === 'b' && R.seatB) R.seat = R.seatB;
       if (!ses || G.sess[ses.key] === 'att' || G.sess[ses.key] === 'barred' || G.sess[ses.key] === 'miss') {
         advanceTime(30); G.energy = Math.min(100, G.energy + 5); show('You rest in the empty hall. +5 energy.', 2500); return;
       }
@@ -6016,6 +6046,7 @@
       return best;
     }
     function spotText(p) {
+      if (p.type === 'vspot') return p.label + (p.sub ? ': ' + p.sub : '');
       if (p.type === 'job') { var gm = jobGate(p); return p.action + ': ~' + naira(p.pay) + ' (-' + p.cost + ' energy, ' + (p.mins || 60) + ' min)' + (gm ? '  [' + gm + ']' : ''); }
       if (p.type === 'home') return G.home && G.home.id === p.homeId ? 'Your room: sleep, furnish, cook' : p.label + ': rent from ' + naira(rentOf(homeById(p.homeId))) + ' a week';
       if (p.type === 'food') return p.action + ': ' + naira(Math.round(p.price * foodMul())) + (p.id === 'buka' && G.flags.freeMeal ? ' (FREE: Mama Put)' : '') + ' (+' + p.gain + ' hunger)';
@@ -6095,6 +6126,541 @@
       show('+' + naira(s.pay + tip) + (tip ? ' (tip included!)' : '') + '\n' + s.lines[Math.floor(Math.random() * s.lines.length)], 4500);
       saveGame();
     }
+
+    // =====================================================================================
+    // RIDE: full-screen map, Uber, suya / shawarma / "As E Dey Hot" spots, campus amenities,
+    // daily quests (early class, front row, foodstuff, cooking, buy a ride), a dealer,
+    // and "Talk" with real players you meet in the world.
+    // =====================================================================================
+    var RX = { ownV: {}, ownT: 0 };
+    (function () {
+      var st = document.createElement('style');
+      st.textContent = [
+        '#bmap{position:fixed;inset:0;z-index:40;background:#1d2b1f;display:none;touch-action:none;font-family:inherit;color:#fff}',
+        '#bmap canvas{width:100%;height:100%;display:block;touch-action:none}',
+        '.bmtop{position:absolute;left:0;right:0;top:0;display:flex;gap:6px;padding:8px;align-items:center;background:linear-gradient(rgba(0,0,0,.65),rgba(0,0,0,0));pointer-events:none}',
+        '.bmtop>*{pointer-events:auto}',
+        '.bmb{background:rgba(30,41,59,.92);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:8px 11px;font-size:14px;font-weight:bold}',
+        '.bmb.g{background:#16a34a;border-color:#16a34a}.bmb.p{background:#db2777;border-color:#db2777}.bmb.r{background:#b91c1c;border-color:#b91c1c}',
+        '#bmsel{flex:1;min-width:0;background:rgba(30,41,59,.92);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:8px;padding:8px;font-size:14px}',
+        '#bmzoom{position:absolute;right:8px;top:62px;display:flex;flex-direction:column;gap:6px}',
+        '#bmsheet{position:absolute;left:0;right:0;bottom:0;background:rgba(12,18,16,.95);padding:10px 12px 14px;border-radius:14px 14px 0 0;font-size:14px;line-height:1.35}',
+        '#bmsheet .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}',
+        '#ubfx{position:fixed;inset:0;z-index:60;background:#05080a;color:#fff;display:none;align-items:center;justify-content:center;flex-direction:column;text-align:center;font-family:inherit;padding:24px}',
+        '#ubfx .car{font-size:54px;animation:ubd 1.1s ease-in-out infinite}@keyframes ubd{0%{transform:translateX(-40px)}50%{transform:translateX(40px)}100%{transform:translateX(-40px)}}',
+        '#tkp{position:fixed;left:8px;bottom:8px;width:min(380px,calc(100vw - 16px));z-index:28;background:rgba(12,18,16,.95);color:#fff;border-radius:12px;padding:8px;display:none;font-size:14px;box-shadow:0 4px 18px rgba(0,0,0,.6)}',
+        '#tkp .bub{max-width:80%;margin:3px 0;padding:5px 9px;border-radius:10px;word-wrap:break-word}#tkp .me{background:#16a34a;margin-left:auto}#tkp .them{background:#334155}',
+        '#tkp input{flex:1;min-width:0;background:#111827;color:#fff;border:1px solid #475569;border-radius:8px;padding:8px;font-size:15px}',
+        '#tkp .chips{display:flex;gap:5px;flex-wrap:wrap;margin:6px 0}#tkp .chips button{background:#1f2937;color:#e5e7eb;border:1px solid #475569;border-radius:12px;padding:3px 9px;font-size:13px}',
+        '.touch #tkp{bottom:130px}'
+      ].join('\n');
+      document.head.appendChild(st);
+    })();
+    function dayIdx() { return Math.floor(G.t / 1440); }
+    function qd(id) { G.flags.qd = G.flags.qd || {}; return G.flags.qd; }
+    function qDoneToday(id) { return qd()[id] === dayIdx(); }
+    function qMark(id) { qd()[id] = dayIdx(); }
+    function openAt(a, b) { var h = hourNow(); return (h >= a && h < b) || (b > 24 && h < b - 24); }
+    function fmtDist(d) { return d >= 1000 ? (d / 1000).toFixed(1) + ' km' : Math.round(d) + ' m'; }
+    function homePos() { var h = G.home ? homeById(G.home.id) : null; return h && h.x !== undefined ? { x: h.x, z: h.z } : { x: D.spots.hostel[0], z: D.spots.hostel[1] }; }
+
+    // ------------------------------------------------------------------ food spots
+    function eatFn(price, hungry, nrg, txt, mins) {
+      return function () {
+        var p = Math.round(price * foodMul());
+        if (G.hunger >= 96) return Nd('You are full. Save your money.', [C('Ok', null)]);
+        if (G.cash < p) return Nd('Oga, you no get money. It is ' + naira(p) + '.', [C('Ok', null)]);
+        spend('food', p); G.hunger = Math.min(100, G.hunger + hungry); G.energy = Math.min(100, G.energy + nrg); advanceTime(mins || 15); AUD.coin();
+        try { playEmote('eat'); } catch (e) { /* ignore */ }
+        return Nd(txt + ' -' + naira(p) + ', +' + hungry + ' hunger.', [C('Nice', null)]);
+      };
+    }
+    function pickL(a) { return a[(Math.random() * a.length) | 0]; }
+    function shut(title, hours) { openDlg(title, Nd('Closed now. Come back ' + hours + '.', [C('Ok', null)]), 41); }
+    function suyaDialog() {
+      if (!openAt(16, 26)) return shut('Suya Spot', 'from 4pm till 2am');
+      openDlg('Suya Spot', Nd('The fire is hot and the smoke is thick. "My friend, what will you chop?"', [
+        C('Plain suya, ₦1,500', eatFn(1500, 26, 2, 'Hot suya with onions and yaji.', 15)),
+        C('Spicy suya + extra onions, ₦2,500', eatFn(2500, 36, 3, 'Pepper enter your eyes, but the meat is sweet.', 20)),
+        C('Kilishi pack, ₦1,200', eatFn(1200, 15, 1, 'Dry, spicy, chewy kilishi.', 10)),
+        C('Ask for gist', function () { return Nd(pickL(['"They say the SUG president hid the generator diesel."', '"Check the library first. Seats are finished by 9am."', '"The shawarma man near Moremi has the best sausage today."', '"If you see lecturers running, ASUU don declare strike."']), [C('Ha!', null)]); }),
+        C('Leave', null)]), 42);
+    }
+    function shawarmaDialog() {
+      if (!openAt(11, 25)) return shut('Shawarma Spot', 'from 11am till 1am');
+      openDlg('Shawarma Spot', Nd('The spit is turning. "Chicken or beef? Pepper? Everything?"', [
+        C('Chicken shawarma, ₦3,500', eatFn(3500, 42, 3, 'Chicken shawarma with everything.', 15)),
+        C('Beef shawarma, ₦3,000', eatFn(3000, 37, 3, 'Beef shawarma, double sausage.', 15)),
+        C('Mini shawarma, ₦1,800', eatFn(1800, 22, 2, 'Small shawarma, fast.', 10)),
+        C('Cold zobo, ₦500', eatFn(500, 4, 5, 'Cold zobo with ginger.', 5)),
+        C('Leave', null)]), 43);
+    }
+    var HOT_GIST = ['"Which hall is hosting tonight?" "Not ours. Our generator is dead."', 'Somebody says the Pit Theatre party starts at 10pm.', 'A guy claims he topped the class. Nobody believes him.', 'Two students argue about who is the best DJ on campus.', 'Somebody whispers that the 8am lecturer will not come.'];
+    function hotDialog() {
+      if (!openAt(18, 27)) return shut('As E Dey Hot', 'from 6pm till 3am');
+      var dn = (G.flags.hotDay === dayIdx() ? (G.flags.hotN | 0) : 0);
+      openDlg('As E Dey Hot', Nd('The speakers are loud and the lights are colourful. Everybody is somebody here.', [
+        C('Buy a chilled drink, ₦800', eatFn(800, 6, 4, 'A cold malt.', 10)),
+        C('Dance (30 min)', function () {
+          if (G.energy < 15) return Nd('You are too tired to dance.', [C('Ok', null)]);
+          if (dn >= 3) return Nd('You have danced enough for today.', [C('Ok', null)]);
+          G.flags.hotDay = dayIdx(); G.flags.hotN = dn + 1; advanceTime(30); G.energy = Math.max(0, G.energy - 10); G.hunger = Math.max(0, G.hunger - 5); reward(2, 'Dance'); try { playEmote('dance'); } catch (e) { /* ignore */ }
+          return Nd('You danced till your shirt stuck to your back. Aura +2.', [C('Ha!', null)]);
+        }),
+        C('Sit and gist (1 hr, ₦1,000 for drinks)', function () {
+          if (G.cash < 1000) return Nd('You cannot sit without buying something.', [C('Ok', null)]);
+          spend('food', 1000); advanceTime(60); G.energy = Math.max(0, G.energy - 3); G.hunger = Math.min(100, G.hunger + 5); reward(1, 'Gist'); AUD.coin();
+          return Nd(pickL(HOT_GIST), [C('Ha!', null)]);
+        }),
+        C('Leave', null)]), 44);
+    }
+
+    // ------------------------------------------------------------------ build the spots
+    (function () {
+      var un = unit;
+      function around(lm, off) { var p = LM[lm] || LM['Student Union Building'] || [-150, -2450]; return findOpen(p[0] + off[0], p[1] + off[1], 3, 140, 9); }
+      function sign(x, y, z, w, txt, bg) {
+        var cv = document.createElement('canvas'); cv.width = 256; cv.height = 64; var c = cv.getContext('2d'); c.fillStyle = bg; c.fillRect(0, 0, 256, 64); c.fillStyle = '#fff'; c.font = 'bold 30px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, 128, 34);
+        var m = new THREE.Mesh(new THREE.PlaneGeometry(w, w / 4), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cv), toneMapped: false })); m.position.set(x, y, z); scene.add(m); return m;
+      }
+      function suyaSpot(name, lm, off) {
+        var p = around(lm, off), x = p[0], z = p[1]; LM[name] = [x, z];
+        vbuild(function (a) {
+          fput(a, un('box'), LC(0x8a7b66), mx(x, 0.03, z, 10, 0.06, 8));
+          fput(a, un('box'), LC(0x6b4a2b), mx(x, 0.55, z - 1.2, 5.4, 1.1, 1.3));
+          fput(a, un('box'), LC(0x2b2b30), mx(x - 1.0, 1.2, z - 1.2, 2.6, 0.3, 0.9)); fput(a, un('box'), LC(0xff5a14), mx(x - 1.0, 1.38, z - 1.2, 2.4, 0.08, 0.7));
+          fput(a, un('box'), LC(0xe8d9b0), mx(x + 1.7, 1.2, z - 1.2, 1.0, 0.3, 0.8));
+          [[-2.8, -2.1], [2.8, -2.1], [-2.8, 1.6], [2.8, 1.6]].forEach(function (q) { fput(a, un('box'), LC(0x4a3a2a), mx(x + q[0], 1.3, z + q[1], 0.12, 2.6, 0.12)); });
+          for (var i = 0; i < 6; i++) fput(a, un('box'), LC(i % 2 ? 0xffffff : 0xdc2626), mx(x - 2.5 + i * 1.0, 2.7, z - 0.2, 1.0, 0.1, 4.0));
+          fput(a, un('box'), LC(0xefe7d6), mx(x + 0.3, 0.55, z - 2.4, 0.8, 1.1, 0.5)); fput(a, un('sph'), LC(0x6a4129), mx(x + 0.3, 1.3, z - 2.4, 0.45, 0.45, 0.45));
+          [[-2.6, 2.4], [0, 2.8], [2.6, 2.4]].forEach(function (q) { fput(a, un('box'), LC(0xcbd5e1), mx(x + q[0], 0.3, z + q[1], 0.8, 0.6, 0.8)); });
+        });
+        boxCollider(x, z - 1.2, 2.8, 0.8);
+        sign(x, 3.3, z - 2.0, 4.0, 'SUYA', '#9a3412');
+        vspot('suya_' + name, name, 'Hot suya. Open 4pm to 2am', name, [0, 3.4], '🍢', 0xf97316, suyaDialog);
+      }
+      function shawaSpot(name, lm, off) {
+        var p = around(lm, off), x = p[0], z = p[1]; LM[name] = [x, z];
+        vbuild(function (a) {
+          fput(a, un('box'), LC(0x8a7b66), mx(x, 0.03, z, 9, 0.06, 7));
+          fput(a, un('box'), LC(0xe5e7eb), mx(x, 0.6, z - 1.1, 5.0, 1.2, 1.4));
+          fput(a, un('box'), LC(0x93c5fd), mx(x, 1.7, z - 1.1, 4.6, 1.0, 0.1));
+          fput(a, un('cyl'), LC(0xc58a4b), mx(x - 1.0, 1.9, z - 1.6, 0.8, 1.4, 0.8)); fput(a, un('cyl'), LC(0x444), mx(x - 1.0, 1.2, z - 1.6, 0.3, 0.2, 0.3));
+          fput(a, un('box'), LC(0x1d4ed8), mx(x, 2.8, z - 0.4, 5.6, 0.12, 3.2));
+          [[-2.7, -1.8], [2.7, -1.8], [-2.7, 1.0], [2.7, 1.0]].forEach(function (q) { fput(a, un('box'), LC(0x374151), mx(x + q[0], 1.4, z + q[1], 0.12, 2.8, 0.12)); });
+          fput(a, un('box'), LC(0xefe7d6), mx(x + 1.4, 0.55, z - 2.3, 0.8, 1.1, 0.5)); fput(a, un('sph'), LC(0x7a4a30), mx(x + 1.4, 1.3, z - 2.3, 0.45, 0.45, 0.45));
+          [[-2.2, 2.2], [2.2, 2.2]].forEach(function (q) { fput(a, un('box'), LC(0x6b7280), mx(x + q[0], 0.35, z + q[1], 1.1, 0.7, 1.1)); });
+        });
+        boxCollider(x, z - 1.1, 2.6, 0.8);
+        sign(x, 3.5, z - 2.0, 4.0, 'SHAWARMA', '#1d4ed8');
+        vspot('shawa_' + name, name, 'Shawarma. Open 11am to 1am', name, [0, 3.4], '🌯', 0x3b82f6, shawarmaDialog);
+      }
+      function hotSpot(name, lm, off) {
+        var p = around(lm, off), x = p[0], z = p[1]; LM[name] = [x, z];
+        vbuild(function (a) {
+          fput(a, un('box'), LC(0x1f1b2e), mx(x, 0.05, z, 16, 0.1, 13));
+          var cols = [0xec4899, 0x22d3ee, 0xfacc15, 0x8b5cf6, 0x22c55e];
+          for (var i = 0; i < 5; i++) fput(a, un('box'), LC(cols[i]), mx(x - 6 + i * 3, 0.12, z + 1.5, 2.6, 0.04, 2.6));
+          [[-7.2, -5.8], [7.2, -5.8], [-7.2, 5.8], [7.2, 5.8]].forEach(function (q, k) { fput(a, un('box'), LC(0x111114), mx(x + q[0], 1.3, z + q[1], 1.1, 2.6, 1.0)); fput(a, un('box'), LC(cols[k]), mx(x + q[0], 2.8, z + q[1], 1.0, 0.25, 0.9)); });
+          fput(a, un('box'), LC(0x2b2540), mx(x, 0.6, z - 5.2, 9, 1.2, 1.2)); fput(a, un('box'), LC(0xec4899), mx(x, 1.25, z - 5.2, 8.6, 0.08, 1.0));
+          for (var j = 0; j < 8; j++) fput(a, un('sph'), LC(cols[j % 5]), mx(x - 7 + j * 2, 3.6, z - 6.2, 0.35, 0.35, 0.35));
+          [[-4, 4.8], [0, 5.0], [4, 4.8]].forEach(function (q) { fput(a, un('box'), LC(0x4b5563), mx(x + q[0], 0.4, z + q[1], 1.2, 0.8, 1.2)); });
+        });
+        boxCollider(x, z - 5.2, 4.6, 0.7);
+        sign(x, 4.6, z - 6.4, 7.0, 'AS E DEY HOT', '#be185d');
+        vspot('hot_' + name, name, 'Music, drinks, gist. Open 6pm to 3am', name, [0, 2.0], '🔥', 0xec4899, hotDialog);
+      }
+      suyaSpot('Suya Spot (Awolowo)', 'Awolowo Hall', [-70, 60]); suyaSpot('Suya Spot (SUB)', 'Student Union Building', [-45, 55]);
+      shawaSpot('Shawarma Spot (Moremi)', 'Moremi Hall', [45, 55]); shawaSpot('Shawarma Spot (Gate)', 'OAU Main Gate', [60, -70]);
+      hotSpot('As E Dey Hot (Alumni)', 'Alumni Hall', [55, -55]); hotSpot('As E Dey Hot (Fajuyi)', 'Fajuyi Hall', [-50, 60]);
+      ALIAS['suya'] = 'Suya Spot (Awolowo)'; ALIAS['shawarma'] = 'Shawarma Spot (Moremi)'; ALIAS['shawarma gate'] = 'Shawarma Spot (Gate)'; ALIAS['hot'] = 'As E Dey Hot (Alumni)'; ALIAS['as e dey hot'] = 'As E Dey Hot (Alumni)'; ALIAS['asedeyhot'] = 'As E Dey Hot (Alumni)';
+      ALIAS['suya sub'] = 'Suya Spot (SUB)'; ALIAS['hot fajuyi'] = 'As E Dey Hot (Fajuyi)';
+    })();
+
+    // ------------------------------------------------------------------ campus amenities (approximate positions)
+    (function () {
+      var un = unit;
+      function around(lm, off) { var p = LM[lm] || LM['Student Union Building'] || [-150, -2450]; return findOpen(p[0] + off[0], p[1] + off[1], 3, 160, 10); }
+      function once(id, price, aura, nrg, mins, txt) {
+        return function () {
+          if (qDoneToday('am_' + id)) return Nd('You already did this today.', [C('Ok', null)]);
+          if (G.cash < price) return Nd('You need ' + naira(price) + '.', [C('Ok', null)]);
+          if (price) spend('shop', price); qMark('am_' + id); advanceTime(mins); G.energy = Math.max(0, Math.min(100, G.energy + nrg)); if (aura) reward(aura, id); AUD.coin(); return Nd(txt, [C('Ok', null)]);
+        };
+      }
+      function building(name, emoji, color, lm, off, w, d, roofCol, sub, fn) {
+        var p = around(lm, off), x = p[0], z = p[1]; LM[name] = [x, z];
+        vbuild(function (a) {
+          fput(a, un('box'), LC(0xefe9dc), mx(x, 2.2, z, w, 4.4, d)); fput(a, un('box'), LC(roofCol), mx(x, 4.6, z, w + 0.8, 0.5, d + 0.8));
+          fput(a, un('box'), LC(0x3b2a1a), mx(x, 1.2, z + d / 2 + 0.05, 1.8, 2.4, 0.12));
+          for (var i = -1; i <= 1; i += 2) fput(a, un('box'), LC(0x93c5fd), mx(x + i * w * 0.28, 2.6, z + d / 2 + 0.05, 1.4, 1.2, 0.12));
+        });
+        boxCollider(x, z, w / 2, d / 2);
+        vspot('am_' + name, name, sub, name, [0, d / 2 + 3.0], emoji, color, fn);
+      }
+      function menu(title, intro, rows) {
+        return function () { openDlg(title, Nd(intro, rows.map(function (r) { return r === 'leave' ? C('Leave', null) : C(r[0], r[1]); })), 45); };
+      }
+      var SUBJECTS = ['MTH', 'CSC', 'STA', 'GST'];
+      function bookshop() {
+        var rows = SUBJECTS.map(function (sj) { return [sj + ' past questions x3, ₦1,000', function () { if (G.cash < 1000) return Nd('You need ₦1,000.', [C('Ok', null)]); spend('shop', 1000); addPq(sj, 3); AUD.coin(); return Nd('You bought 3 ' + sj + ' past questions. They help in class.', [C('Ok', null)]); }]; });
+        rows.push('leave'); menu('University Bookshop', 'Textbooks, notebooks and photocopied past questions.', rows)();
+      }
+      function directions() {
+        var places = ['Hezekiah Oluwasanmi Library', 'Student Union Building', 'OAU Health Centre', 'OAU Sports Centre', 'Oduduwa Hall', 'OAU Market'];
+        openDlg('Security Post', Nd('"Good day. Where are you going? I will point you."', places.filter(function (n) { return LM[n]; }).map(function (n) { return C(n, function () { setDest({ x: LM[n][0], z: LM[n][1], label: n }); return Nd('"Follow the pink marker on your map."', [C('Thanks', null)]); }); }).concat([C('Nowhere', null)])), 46);
+      }
+      var AM = [
+        ['Bank & ATMs', '🏧', 0x2563eb, 'Student Union Building', [60, 30], 12, 9, 0x1e3a8a, 'ATMs and bank counters', menu('Bank & ATMs', 'A long queue. The ATM says "Network error" twice.', [['Check my balance', function () { return Nd('You have ' + naira(G.cash) + ' on you. (Game cash is already in your pocket.)', [C('Ok', null)]); }], 'leave'])],
+        ['Post Office', '📮', 0xdc2626, 'University Senate Building', [60, -45], 10, 8, 0xb91c1c, 'Letters and parcels', menu('Post Office', 'A tired clerk looks up. "Yes?"', [['Post a letter home, ₦200', once('post', 200, 1, 0, 25, 'Mama will be happy to read from you. Aura +1.')], 'leave'])],
+        ['University Bookshop', '📚', 0x16a34a, 'Hezekiah Oluwasanmi Library', [55, 45], 12, 9, 0x166534, 'Books and past questions', bookshop],
+        ['Cafeteria (Moremi side)', '🍽️', 0xf59e0b, 'Moremi Hall', [-65, -30], 14, 10, 0xb45309, 'Rice, stew, swallow', menu('Cafeteria', 'The server holds a ladle. "Next!"', [['Jollof + chicken, ₦2,200', eatFn(2200, 40, 4, 'Plate of jollof with chicken.', 25)], ['Amala + ewedu, ₦1,800', eatFn(1800, 36, 4, 'Amala with ewedu and gbegiri.', 25)], 'leave'])],
+        ['Cafeteria (Faculty side)', '🍽️', 0xf59e0b, 'Faculty of Technology', [50, 45], 14, 10, 0xb45309, 'Rice, stew, swallow', menu('Cafeteria', 'The server holds a ladle. "Next!"', [['Jollof + chicken, ₦2,200', eatFn(2200, 40, 4, 'Plate of jollof with chicken.', 25)], ['Pounded yam + egusi, ₦2,000', eatFn(2000, 38, 4, 'Pounded yam and egusi.', 25)], 'leave'])],
+        ['Swimming Pool', '🏊', 0x06b6d4, 'OAU Sports Centre', [-70, 45], 12, 9, 0x0e7490, 'Swim for ₦500', menu('Swimming Pool', 'The water is cold and blue.', [['Swim (40 min), ₦500', once('pool', 500, 1, -8, 40, 'You swam a few laps. Tired but fresh. Aura +1.')], 'leave'])],
+        ['Gym', '🏋️', 0x7c3aed, 'OAU Sports Centre', [70, -55], 11, 9, 0x5b21b6, 'Workout for ₦300', menu('Gym', 'Iron clanks. Somebody grunts.', [['Workout (45 min), ₦300', once('gym', 300, 1, -12, 45, 'You lifted until your arms shook. Aura +1.')], 'leave'])],
+        ['Pharmacy', '💊', 0x10b981, 'OAU Health Centre', [-40, 35], 9, 8, 0x047857, 'Drugs and first aid', menu('Pharmacy', 'The pharmacist peers over his glasses.', [['Paracetamol and vitamin C, ₦600', function () { if (G.cash < 600) return Nd('You need ₦600.', [C('Ok', null)]); spend('shop', 600); G.energy = Math.min(100, G.energy + 15); AUD.coin(); return Nd('You feel a bit better. Energy +15.', [C('Ok', null)]); }], 'leave'])],
+        ['Barber & Salon', '💈', 0xf43f5e, 'Student Union Building', [-70, 45], 9, 8, 0xbe123c, 'A fresh cut for ₦1,000', menu('Barber & Salon', 'Clippers buzz. "Sit down, fresh cut loading."', [['Fresh cut or braids, ₦1,000', once('barber', 1000, 2, 0, 50, 'You look sharp. People notice. Aura +2.')], 'leave'])],
+        ['Laundry', '🧺', 0x0ea5e9, 'Awolowo Hall', [55, -75], 9, 8, 0x0369a1, 'Wash and iron for ₦800', menu('Laundry', 'The smell of detergent fills the air.', [['Wash and iron, ₦800', once('laundry', 800, 1, 0, 30, 'Clean, ironed clothes. Aura +1.')], 'leave'])],
+        ['Campus Radio', '📻', 0xa855f7, 'Student Union Building', [15, -80], 10, 8, 0x6b21a8, 'Student radio station', menu('Campus Radio', 'The ON AIR light is red. A presenter waves at you.', [['Send a shout-out, free', once('radio', 0, 1, 0, 10, 'Your name was read on air. Aura +1.')], 'leave'])],
+        ['Botanical Garden', '🌳', 0x22c55e, 'Faculty of Social Sciences', [95, -60], 14, 10, 0x15803d, 'Quiet place to rest', menu('Botanical Garden', 'Birds sing. It is quiet.', [['Rest under a tree (30 min)', function () { advanceTime(30); G.energy = Math.min(100, G.energy + 10); G.hunger = Math.max(0, G.hunger - 3); return Nd('You rest. Energy +10.', [C('Ok', null)]); }], 'leave'])],
+        ['Security Post', '🛡️', 0x64748b, 'OAU Main Gate', [-35, 35], 7, 6, 0x334155, 'Ask for directions', directions]
+      ];
+      AM.forEach(function (a) { building(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9]); });
+      ALIAS['bank'] = 'Bank & ATMs'; ALIAS['atm'] = 'Bank & ATMs'; ALIAS['post office'] = 'Post Office'; ALIAS['bookshop'] = 'University Bookshop'; ALIAS['cafe'] = 'Cafeteria (Moremi side)'; ALIAS['cafeteria'] = 'Cafeteria (Moremi side)';
+      ALIAS['pool'] = 'Swimming Pool'; ALIAS['gym'] = 'Gym'; ALIAS['pharmacy'] = 'Pharmacy'; ALIAS['barber'] = 'Barber & Salon'; ALIAS['salon'] = 'Barber & Salon'; ALIAS['laundry'] = 'Laundry'; ALIAS['radio'] = 'Campus Radio'; ALIAS['garden'] = 'Botanical Garden'; ALIAS['security'] = 'Security Post';
+    })();
+
+    // ------------------------------------------------------------------ foodstuff stall and the vehicle dealer
+    (function () {
+      var mk = LM['OAU Market'] || LM['Awolowo Hall'] || [-780, -2530];
+      function stock(n, price, label) {
+        return C(label + ', ' + naira(price), function () {
+          if (G.cash < price) return Nd('You need ' + naira(price) + '.', [C('Ok', null)]);
+          spend('shop', price); G.flags.stock = (G.flags.stock | 0) + n; AUD.coin();
+          var extra = ''; if (!qDoneToday('stock')) { qMark('stock'); reward(1, 'Foodstuff'); extra = ' Quest done: aura +1.'; }
+          return Nd('You bought foodstuff. Portions in stock: ' + G.flags.stock + '. Cook in your room.' + extra, [C('Ok', null)]);
+        });
+      }
+      var fp = findOpen(mk[0] + 8, mk[1] + 28, 2, 50, 2.2);
+      vbuild(function (a) {
+        var x = fp[0], z = fp[1], un = unit;
+        fput(a, un('box'), LC(0x7a5632), mx(x, 0.5, z, 5, 1.0, 1.5));
+        [[0xf5f5dc, -1.7], [0xb45309, -0.6], [0xdc2626, 0.5], [0x16a34a, 1.6]].forEach(function (b) { fput(a, un('box'), LC(b[0]), mx(x + b[1], 1.25, z, 0.9, 0.5, 0.8)); });
+        [[-2.4, -1], [2.4, -1], [-2.4, 1], [2.4, 1]].forEach(function (q) { fput(a, un('box'), LC(0x4a3a2a), mx(x + q[0], 1.3, z + q[1], 0.12, 2.6, 0.12)); });
+        fput(a, un('box'), LC(0x16a34a), mx(x, 2.7, z, 5.6, 0.12, 3.2));
+      });
+      boxCollider(fp[0], fp[1], 2.5, 0.8);
+      LM['Foodstuff Stall'] = [fp[0], fp[1]]; ALIAS['foodstuff'] = 'Foodstuff Stall'; ALIAS['foodstuffs'] = 'Foodstuff Stall'; ALIAS['provisions'] = 'Foodstuff Stall';
+      var fs0 = vspot('v_food', 'Foodstuff Stall', 'Rice, beans, tomato, oil', 'Foodstuff Stall', [0, 2.8], '🛍️', 0x84cc16, function () {
+        if (!openAt(7, 19)) return shut('Foodstuff Stall', 'between 7am and 7pm');
+        openDlg('Foodstuff Stall', Nd('Rice, beans, garri, tomato, pepper, oil. You have ' + (G.flags.stock | 0) + ' portions at home.', [stock(3, 1200, 'Small bag (3 portions)'), stock(8, 3000, 'Big bag (8 portions)'), C('Leave', null)]), 47);
+      });
+      // vehicle dealer near the Main Gate
+      var dg = LM['OAU Main Gate'] || [19, -10], dp = findOpen(dg[0] + 55, dg[1] + 45, 4, 140, 9), dx = dp[0], dz = dp[1];
+      LM['Auto Dealer'] = [dx, dz]; ALIAS['dealer'] = 'Auto Dealer'; ALIAS['auto dealer'] = 'Auto Dealer'; ALIAS['car'] = 'Auto Dealer';
+      vbuild(function (a) {
+        var un = unit; fput(a, un('box'), LC(0x8a8f95), mx(dx, 0.03, dz, 18, 0.06, 12)); fput(a, un('box'), LC(0xe5e7eb), mx(dx - 6, 1.6, dz - 4, 5.0, 3.2, 3.0)); fput(a, un('box'), LC(0x0f766e), mx(dx - 6, 3.4, dz - 4, 5.6, 0.4, 3.6));
+        for (var i = 0; i < 6; i++) fput(a, un('box'), LC(i % 2 ? 0xfacc15 : 0xdc2626), mx(dx + 1 + i * 1.5, 3.4, dz + 3, 0.5, 0.4, 0.5));
+      });
+      boxCollider(dx - 6, dz - 4, 2.6, 1.6);
+      function buy(kind, price, name, flag) {
+        return C(name + ', ' + naira(price), function () {
+          if ((G.flags.own || {})[kind]) return Nd('You already own one.', [C('Ok', null)]);
+          if (G.cash < price) return Nd('The dealer smiles. "Come back with ' + naira(price) + '."', [C('Ok', null)]);
+          spend('shop', price); G.flags.own = G.flags.own || {}; G.flags.own[kind] = 1; G.q.wheels = 3; AUD.coin(); reward(25, 'New ride'); saveGame(); ownSync(true);
+          return Nd('Congratulations! Your ' + name + ' is parked at your hostel. Walk to it and press ACT to drive.', [C('Wow', null)]);
+        });
+      }
+      vspot('v_dealer', 'Auto Dealer', 'Buy a keke or a car', 'Auto Dealer', [-2, 5], '🚗', 0x0f766e, function () {
+        openDlg('Auto Dealer', Nd('Used keke or used car, all clean. Cash only. ' + ((G.flags.own || {}).okada || (G.flags.own || {}).sedan ? 'You already own: ' + [(G.flags.own || {}).okada ? 'keke' : '', (G.flags.own || {}).sedan ? 'car' : ''].filter(Boolean).join(' and ') + '.' : ''), [
+          buy('okada', 450000, 'Used keke'), buy('sedan', 1200000, 'Used Toyota car'), C('Just looking', null)]), 48);
+      });
+    })();
+    // owned vehicles are parked at your hostel
+    function ownSync(force) {
+      var own = G.flags.own || {}, base = homePos();
+      ['okada', 'sedan'].forEach(function (k) {
+        if (!own[k] || RX.ownV[k]) return;
+        var o = findOpen(base.x + 16 + (k === 'sedan' ? 8 : 0), base.z + 12, 3, 70, 3.2), v = addVehicle(k, o[0], o[1], 1.2, false); v.own = true; RX.ownV[k] = v;
+      });
+    }
+
+    // ------------------------------------------------------------------ quests
+    function nextEarly() { var s = nextSession(); if (!s || s.exam) return null; return s; }
+    QD.early = { title: 'Be early for class',
+      obj: function () { var s = nextEarly(); if (!s || qDoneToday('early') || s.start - G.t > 360 || s.start - G.t < 8) return null; return 'Get to ' + s.c.venue + ' at least 10 minutes before ' + s.c.code + ' (' + hhmm(s.start) + ') and take your seat. Bonus for the FIRST ROW.'; },
+      tgt: function () { var s = nextEarly(); if (!s || !LM[s.c.venue]) return null; return { x: LM[s.c.venue][0], z: LM[s.c.venue][1], label: s.c.venue }; } };
+    QD.stock = { title: 'Buy foodstuff',
+      obj: function () { return (G.flags.stock | 0) < 1 && !qDoneToday('stock') ? 'Buy a bag of foodstuff at the Foodstuff Stall in the OAU Market (from ₦1,200). It makes cooking cheaper.' : null; },
+      tgt: function () { var p = LM['Foodstuff Stall']; return p ? { x: p[0], z: p[1], label: 'Foodstuff Stall' } : null; } };
+    QD.cook = { title: 'Cook in your room',
+      obj: function () { return (G.flags.stock | 0) >= 1 && !qDoneToday('cook') && G.home ? 'Cook a meal in your room (you need a gas cooker). Foodstuff in stock: ' + (G.flags.stock | 0) + '.' : null; },
+      tgt: function () { var h = G.home ? homePos() : null; return h ? { x: h.x, z: h.z, label: 'Your hostel' } : null; } };
+    QD.wheels = { title: 'Get your own ride',
+      obj: function () { return qs('wheels') === 3 || (G.flags.own && (G.flags.own.okada || G.flags.own.sedan)) ? null : 'Save up and visit the Auto Dealer near the Main Gate. Used keke ₦450,000. Used car ₦1,200,000.'; },
+      tgt: function () { var p = LM['Auto Dealer']; return p ? { x: p[0], z: p[1], label: 'Auto Dealer' } : null; } };
+    ['early', 'stock', 'cook', 'wheels'].forEach(function (id) { if (QORDER.indexOf(id) < 0) QORDER.push(id); });
+    (function () {
+      var _cm = cookMeal;
+      cookMeal = function () {
+        var s = G.flags.stock | 0;
+        if (s > 0) {
+          G.flags.stock = s - 1; G.hunger = Math.min(100, G.hunger + 48); G.energy = Math.min(100, G.energy + 5); advanceTime(40); AUD.coin();
+          if (!qDoneToday('cook')) { qMark('cook'); earn('quest', 300); reward(1, 'Cooking'); setTimeout(function () { show('Quest done: you cooked from your own foodstuff. +₦300, aura +1.', 4000); }, 50); }
+          return true;
+        }
+        return _cm();
+      };
+      var _bl = beginLecture;
+      beginLecture = function (ses) {
+        _bl(ses);
+        if (lecture) { lecture.early = (ses.start - G.t) >= 10; lecture.sat = INT && INT.sat || 'm'; }
+      };
+      var _fl = finishLecture;
+      finishLecture = function (L) {
+        var early = !!(L && L.early), sat = L && L.sat; _fl(L);
+        if (sat === 'f') { G.cgpa = clamp(G.cgpa + 0.006, 0, 5); }
+        if (early && !qDoneToday('early')) { qMark('early'); earn('quest', 600); reward(3, 'Early'); setTimeout(function () { banner('Early bird', 'You reached class early. +₦600, aura +3.'); }, 800); }
+        if (sat === 'f' && !qDoneToday('front')) { qMark('front'); earn('quest', 400); reward(2, 'Front row'); setTimeout(function () { show('Front row bonus: +₦400, aura +2, a little CGPA boost.', 4000); }, 2500); }
+      };
+    })();
+
+    // ------------------------------------------------------------------ Uber
+    var UB = { busy: false };
+    function uberQuote(x, z) {
+      var d = Math.hypot(x - player.x, z - player.z), mult = (isNight() ? 1.3 : 1) * (W.rain > 0.4 ? 1.2 : 1);
+      return { d: d, fare: Math.max(800, Math.round((600 + d * 0.45) * mult / 50) * 50), wait: Math.round(3 + Math.min(5, d / 500)), ride: Math.max(3, Math.round(d / 450)), surge: mult > 1.01 };
+    }
+    function uberBlock() {
+      if (UB.busy) return 'A ride is already on.';
+      if (INT) return 'Step outside first. The driver cannot find you inside.';
+      if (drv) return 'Get off your vehicle first.';
+      if (lecture || mg || working) return 'Finish what you are doing first.';
+      return null;
+    }
+    function uberOpen(dest) {
+      var b = uberBlock(); if (b) { show(b, 3000); return; }
+      if (!dest) { openBigMap('Tap where you want to go, then tap Call Uber.'); return; }
+      var q = uberQuote(dest.x, dest.z);
+      if (q.d < 30) { show('You are already there.', 2500); return; }
+      openDlg('Uber', Nd('Trip to ' + dest.label + '\n' + fmtDist(q.d) + '. Fare ' + naira(q.fare) + (q.surge ? ' (busy hour price)' : '') + '.\nPickup in about ' + q.wait + ' min, ride about ' + q.ride + ' min.\nYou have ' + naira(G.cash) + '.', [
+        C('Request ride (' + naira(q.fare) + ')', function () { uberGo(dest); return null; }), C('Cancel', null)]), 49);
+    }
+    function uberGo(dest) {
+      var b = uberBlock(); if (b) { show(b, 3000); return; }
+      var q = uberQuote(dest.x, dest.z);
+      if (G.cash < q.fare) { show('Fare is ' + naira(q.fare) + '. You do not have it.', 3500); return; }
+      spend('fee', q.fare); UB.busy = true; G.st.ubers = (G.st.ubers | 0) + 1; AUD.coin();
+      var fx = document.getElementById('ubfx');
+      if (!fx) { fx = document.createElement('div'); fx.id = 'ubfx'; document.body.appendChild(fx); }
+      var drvName = pickL(['Tunde', 'Kayode', 'Bisi', 'Femi', 'Sola', 'Wale']), car = pickL(['Toyota Corolla', 'Honda Accord', 'Toyota Camry', 'Hyundai Elantra']), plate = 'IFE-' + (100 + ((Math.random() * 899) | 0)) + 'XA';
+      function scr(t1, t2) { fx.innerHTML = '<div class="car">🚕</div><div style="font-size:20px;font-weight:bold;margin-top:12px">' + t1 + '</div><div style="opacity:.8;margin-top:6px">' + t2 + '</div>'; }
+      fx.style.display = 'flex'; scr('Finding a driver...', 'Trip to ' + esc(dest.label));
+      setTimeout(function () { scr(esc(drvName) + ' is coming', esc(car) + ', ' + plate + '. About ' + q.wait + ' min away.'); }, 1500);
+      setTimeout(function () { scr('On the way', esc(dest.label) + '. ' + fmtDist(q.d)); }, 3300);
+      setTimeout(function () {
+        advanceTime(q.wait + q.ride); G.energy = Math.max(0, G.energy - 1); G.hunger = Math.max(0, G.hunger - 2);
+        var o = findOpen(dest.x, dest.z, 2, 60, 1.2); player.x = o[0]; player.z = o[1]; if (typeof camPos !== 'undefined' && camPos.set) camPos.set(player.x, 40, player.z + 20);
+        if (DEST && Math.hypot(DEST.x - player.x, DEST.z - player.z) < 40) setDest(null);
+        fx.style.display = 'none'; UB.busy = false; show('You arrived at ' + dest.label + '. ' + drvName + ': "Safe journey. Rate me five stars."', 4500); saveGame();
+      }, 5200);
+    }
+
+    // ------------------------------------------------------------------ the big map
+    var BM = { open: false, cx: 0, cz: 0, sc: 0.5, sel: null, ptrs: {}, start: null, el: null, cv: null, cx2: null, rb: null, bb: null, hint: '' };
+    function bmPlaces() {
+      var out = [], seen = {};
+      Object.keys(LM).forEach(function (n) { if (/^Road /.test(n)) return; seen[n] = 1; out.push({ label: n, x: LM[n][0], z: LM[n][1], kind: 'lm' }); });
+      SPOTS.forEach(function (s) { if (s.label && !seen[s.label] && s.type !== 'home') { seen[s.label] = 1; out.push({ label: s.label, x: s.x, z: s.z, kind: 'spot', s: s }); } });
+      var h = homePos(); out.push({ label: 'My hostel', x: h.x, z: h.z, kind: 'lm' });
+      return out;
+    }
+    function bmBuild() {
+      if (BM.el) return;
+      var el = document.createElement('div'); el.id = 'bmap';
+      el.innerHTML = '<canvas id="bmc"></canvas><div class="bmtop"><button class="bmb r" data-a="close">✕</button><select id="bmsel"></select></div>' +
+        '<div id="bmzoom"><button class="bmb" data-a="zin">+</button><button class="bmb" data-a="zout">−</button><button class="bmb" data-a="me">Me</button><button class="bmb" data-a="fit">All</button></div><div id="bmsheet"></div>';
+      document.body.appendChild(el); BM.el = el; BM.cv = document.getElementById('bmc'); BM.cx2 = BM.cv.getContext('2d');
+      el.addEventListener('click', function (e) { var a = e.target && e.target.getAttribute && e.target.getAttribute('data-a'); if (a) bmAct(a); });
+      document.getElementById('bmsel').addEventListener('change', function () {
+        var i = +this.value; if (isNaN(i) || i < 0) return; var p = BM.places[i]; BM.cx = p.x; BM.cz = p.z; BM.sc = Math.max(BM.sc, 0.5); bmSelect(p.x, p.z, p, true); this.value = '-1';
+      });
+      var cv = BM.cv;
+      function pt(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height, k: cv.width / r.width }; }
+      cv.addEventListener('pointerdown', function (e) { e.preventDefault(); cv.setPointerCapture(e.pointerId); var p = pt(e); BM.ptrs[e.pointerId] = p; BM.start = { x: p.x, y: p.y, t: performance.now(), moved: 0 }; BM.pinch = null; });
+      cv.addEventListener('pointermove', function (e) {
+        var old = BM.ptrs[e.pointerId]; if (!old) return; var p = pt(e); BM.ptrs[e.pointerId] = p; var ids = Object.keys(BM.ptrs);
+        if (ids.length === 1) { BM.cx -= (p.x - old.x) / BM.sc; BM.cz -= (p.y - old.y) / BM.sc; if (BM.start) BM.start.moved += Math.abs(p.x - old.x) + Math.abs(p.y - old.y); bmDraw(); }
+        else if (ids.length >= 2) {
+          var a = BM.ptrs[ids[0]], b = BM.ptrs[ids[1]], d = Math.hypot(a.x - b.x, a.y - b.y); if (BM.start) BM.start.moved += 99;
+          if (BM.pinch) { BM.sc = Math.max(0.05, Math.min(4, BM.sc * d / BM.pinch)); } BM.pinch = d; bmDraw();
+        }
+      });
+      function up(e) {
+        var p = BM.ptrs[e.pointerId]; delete BM.ptrs[e.pointerId]; BM.pinch = null;
+        if (p && BM.start && BM.start.moved < 10 && performance.now() - BM.start.t < 600 && Object.keys(BM.ptrs).length === 0) bmTap(p.x, p.y);
+      }
+      cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', function (e) { delete BM.ptrs[e.pointerId]; BM.pinch = null; });
+      cv.addEventListener('wheel', function (e) { e.preventDefault(); BM.sc = Math.max(0.05, Math.min(4, BM.sc * (e.deltaY < 0 ? 1.2 : 1 / 1.2))); bmDraw(); }, { passive: false });
+      window.addEventListener('resize', function () { if (BM.open) bmDraw(); });
+    }
+    function bmFit() { var W2 = BM.cv.width, H2 = BM.cv.height; BM.cx = (D.bounds[0] + D.bounds[2]) / 2; BM.cz = (D.bounds[1] + D.bounds[3]) / 2; BM.sc = Math.min(W2 / (D.bounds[2] - D.bounds[0]), H2 / (D.bounds[3] - D.bounds[1])) * 0.95; }
+    function openBigMap(hint) {
+      if (UB.busy) return; bmBuild(); BM.hint = hint || ''; BM.open = true; BM.el.style.display = 'block';
+      var r = Math.min(2, window.devicePixelRatio || 1); BM.cv.width = Math.round(window.innerWidth * r); BM.cv.height = Math.round(window.innerHeight * r);
+      BM.places = bmPlaces().sort(function (a, b) { return a.label < b.label ? -1 : 1; });
+      document.getElementById('bmsel').innerHTML = '<option value="-1">Jump to a place...</option>' + BM.places.map(function (p, i) { return '<option value="' + i + '">' + esc(p.label) + '</option>'; }).join('');
+      BM.cx = player.x; BM.cz = player.z; BM.sc = 0.6 * r; BM.sel = DEST ? { x: DEST.x, z: DEST.z, label: DEST.label, named: true } : null; bmSheet(); bmDraw();
+    }
+    function closeBigMap() { BM.open = false; if (BM.el) BM.el.style.display = 'none'; }
+    function bmWorld(sx, sy) { return { x: BM.cx + (sx - BM.cv.width / 2) / BM.sc, z: BM.cz + (sy - BM.cv.height / 2) / BM.sc }; }
+    function bmTap(sx, sy) {
+      var w = bmWorld(sx, sy), best = null, bd = 1e9, rad = 26 / BM.sc * (BM.cv.width / BM.cv.getBoundingClientRect().width);
+      BM.places.forEach(function (p) { var d = Math.hypot(p.x - w.x, p.z - w.z); if (d < bd && d < rad) { bd = d; best = p; } });
+      bmSelect(best ? best.x : w.x, best ? best.z : w.z, best, false);
+    }
+    function bmNearest(x, z) { var best = null, bd = 1e9; BM.places.forEach(function (p) { var d = Math.hypot(p.x - x, p.z - z); if (d < bd) { bd = d; best = p; } }); return best ? { p: best, d: bd } : null; }
+    function bmSelect(x, z, place, center) {
+      if (place) BM.sel = { x: place.x, z: place.z, label: place.label, named: true };
+      else { var n = bmNearest(x, z); BM.sel = { x: x, z: z, label: 'Dropped pin' + (n ? ' (near ' + n.p.label + ', ' + fmtDist(n.d) + ')' : ''), named: false }; }
+      bmSheet(); bmDraw();
+    }
+    function bmSheet() {
+      var sh = document.getElementById('bmsheet'), s = BM.sel, h = '';
+      if (BM.hint && !s) h += '<div style="opacity:.85;margin-bottom:4px">' + esc(BM.hint) + '</div>';
+      if (!s) h += '<div style="opacity:.8">Tap anywhere on the map to drop a pin, or tap a place. Pinch or scroll to zoom. White arrow: you.' + (DEST ? ' Beacon: ' + esc(DEST.label) + '.' : '') + '</div>';
+      else {
+        var q = uberQuote(s.x, s.z), mins = Math.round(q.d / 75);
+        h += '<b>' + esc(s.label) + '</b><div style="opacity:.85">' + fmtDist(q.d) + ' from you. Walk: about ' + mins + ' min. Uber: ' + naira(q.fare) + ', about ' + (q.wait + q.ride) + ' min.</div>';
+        h += '<div class="row"><button class="bmb p" data-a="beacon">Set beacon</button><button class="bmb g" data-a="uber">Call Uber (' + naira(q.fare) + ')</button>' + (DEST ? '<button class="bmb" data-a="clear">Clear beacon</button>' : '') + '</div>';
+      }
+      sh.innerHTML = h;
+    }
+    function bmAct(a) {
+      if (a === 'close') closeBigMap();
+      else if (a === 'zin') { BM.sc = Math.min(4, BM.sc * 1.5); bmDraw(); } else if (a === 'zout') { BM.sc = Math.max(0.05, BM.sc / 1.5); bmDraw(); }
+      else if (a === 'me') { BM.cx = player.x; BM.cz = player.z; bmDraw(); } else if (a === 'fit') { bmFit(); bmDraw(); }
+      else if (a === 'beacon' && BM.sel) { setDest({ x: BM.sel.x, z: BM.sel.z, label: BM.sel.label }); closeBigMap(); show('Beacon set: ' + BM.sel.label + '. Follow the pink marker.', 3500); }
+      else if (a === 'clear') { setDest(null); BM.sel = null; bmSheet(); bmDraw(); }
+      else if (a === 'uber' && BM.sel) { var d = { x: BM.sel.x, z: BM.sel.z, label: BM.sel.label }; closeBigMap(); uberOpen(d); }
+    }
+    function bmDraw() {
+      if (!BM.open) return;
+      var c = BM.cx2, W2 = BM.cv.width, H2 = BM.cv.height, sc = BM.sc, k = BM.cv.width / window.innerWidth;
+      function X(x) { return W2 / 2 + (x - BM.cx) * sc; } function Z(z) { return H2 / 2 + (z - BM.cz) * sc; }
+      var x0 = BM.cx - W2 / 2 / sc - 30, x1 = BM.cx + W2 / 2 / sc + 30, z0 = BM.cz - H2 / 2 / sc - 30, z1 = BM.cz + H2 / 2 / sc + 30;
+      c.fillStyle = '#35553a'; c.fillRect(0, 0, W2, H2);
+      if (!BM.rb) {
+        BM.rb = []; D.roads.forEach(function (r) { var mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9; for (var i = 1; i < r.length; i += 2) { var x = r[i] / 10, z = r[i + 1] / 10; if (x < mnx) mnx = x; if (x > mxx) mxx = x; if (z < mnz) mnz = z; if (z > mxz) mxz = z; } BM.rb.push([mnx, mxx, mnz, mxz]); });
+        BM.bb = D.buildings.map(function (b) { return [b[3] / 10, b[4] / 10]; });
+      }
+      c.lineCap = 'round'; c.lineJoin = 'round';
+      for (var t = 6; t >= 0; t--) {
+        c.strokeStyle = t <= 1 ? '#f0e2a8' : (t <= 3 ? '#d8d2c0' : '#8c8470'); c.lineWidth = Math.max(1.2 * k, ROADW[t] * sc * (t <= 3 ? 1.1 : 0.9));
+        c.beginPath();
+        D.roads.forEach(function (r, ri) {
+          if (r[0] !== t) return; var bb = BM.rb[ri]; if (bb[1] < x0 || bb[0] > x1 || bb[3] < z0 || bb[2] > z1) return;
+          c.moveTo(X(r[1] / 10), Z(r[2] / 10)); for (var i = 3; i < r.length; i += 2) c.lineTo(X(r[i] / 10), Z(r[i + 1] / 10));
+        });
+        c.stroke();
+      }
+      c.fillStyle = '#6b6b73';
+      D.buildings.forEach(function (b, bi) {
+        var p = BM.bb[bi]; if (p[0] < x0 || p[0] > x1 || p[1] < z0 || p[1] > z1) return;
+        c.beginPath(); for (var i = 3; i < b.length; i += 2) { var x = X(b[i] / 10), z = Z(b[i + 1] / 10); if (i === 3) c.moveTo(x, z); else c.lineTo(x, z); } c.closePath(); c.fill();
+      });
+      // traffic
+      if (sc > 0.18 * k) VEH.forEach(function (v) { if (!v.moving) return; if (v.x < x0 || v.x > x1 || v.z < z0 || v.z > z1) return; c.fillStyle = v.kind === 'bus' ? '#22c55e' : (v.kind === 'danfo' ? '#60a5fa' : (v.kind === 'okada' ? '#facc15' : '#e5e7eb')); c.fillRect(X(v.x) - 3 * k, Z(v.z) - 3 * k, 6 * k, 6 * k); });
+      // places
+      var fs = Math.round(11 * k); c.font = 'bold ' + fs + 'px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'bottom'; c.lineWidth = 3 * k; c.strokeStyle = 'rgba(0,0,0,.8)'; c.fillStyle = '#fff';
+      var show1 = sc > 0.35 * k ? 2 : (sc > 0.12 * k ? 1 : 0);
+      BM.places.forEach(function (p) {
+        if (p.x < x0 || p.x > x1 || p.z < z0 || p.z > z1) return;
+        var major = p.kind === 'lm' || /Hall|Gate|Market|Chapel|Mosque|Dealer|Library|Hot|Suya|Shawarma/.test(p.label);
+        if (p.kind === 'spot' && !major && show1 < 2) return;
+        if (!major && show1 < 1) return; if (show1 === 0 && !/Gate|Library|Hall|Union|Senate|Health/.test(p.label)) return;
+        var sx = X(p.x), sy = Z(p.z); c.fillStyle = p.s && p.s.color !== undefined ? '#' + ('000000' + p.s.color.toString(16)).slice(-6) : '#fbbf24'; c.beginPath(); c.arc(sx, sy, 4 * k, 0, 6.283); c.fill();
+        c.fillStyle = '#fff'; var lab = p.label.replace(/ \(.*\)/, ''); c.strokeText(lab, sx, sy - 6 * k); c.fillText(lab, sx, sy - 6 * k);
+      });
+      // other players
+      Object.keys(SOC.remotes).forEach(function (n) { var R = SOC.remotes[n]; if (!R.init) return; c.fillStyle = '#22d3ee'; c.beginPath(); c.arc(X(R.x), Z(R.z), 4 * k, 0, 6.283); c.fill(); if (sc > 0.3 * k) { c.fillStyle = '#fff'; c.strokeText(R.id, X(R.x), Z(R.z) - 6 * k); c.fillText(R.id, X(R.x), Z(R.z) - 6 * k); } });
+      // beacon + selection
+      function pin(o, col) { var sx = X(o.x), sy = Z(o.z); c.fillStyle = col; c.strokeStyle = '#fff'; c.lineWidth = 2 * k; c.beginPath(); c.arc(sx, sy, 8 * k, 0, 6.283); c.fill(); c.stroke(); c.beginPath(); c.moveTo(sx, sy + 8 * k); c.lineTo(sx, sy + 20 * k); c.stroke(); }
+      if (DEST) pin(DEST, '#f472b6'); if (BM.sel) pin(BM.sel, '#22c55e');
+      // me
+      c.save(); c.translate(X(player.x), Z(player.z)); c.rotate(Math.PI - player.rot); c.fillStyle = '#fff'; c.strokeStyle = '#111'; c.lineWidth = 2 * k; c.beginPath(); c.moveTo(0, -12 * k); c.lineTo(8 * k, 9 * k); c.lineTo(0, 5 * k); c.lineTo(-8 * k, 9 * k); c.closePath(); c.fill(); c.stroke(); c.restore();
+      c.fillStyle = '#fff'; c.font = 'bold ' + Math.round(14 * k) + 'px sans-serif'; c.textAlign = 'left'; c.strokeText('N ↑   scale: ' + fmtDist(120 / sc * 1), 10 * k, H2 - 130 * k); c.fillText('N ↑   scale: ' + fmtDist(120 / sc * 1), 10 * k, H2 - 130 * k);
+    }
+    (function () {
+      var m = document.getElementById('mini'); if (m) { m.style.cursor = 'pointer'; m.addEventListener('click', function () { if (!DL.on && !INT) openBigMap(); }); }
+      window.addEventListener('keydown', function (e) { if (cmdOn && e.code !== 'Escape') return; if (e.code === 'KeyG' && !e.repeat && !DL.on && !panelOpen) { if (BM.open) closeBigMap(); else if (!INT) openBigMap(); } else if (e.code === 'Escape' && BM.open) closeBigMap(); }, true);
+      VERBS.push({ id: 'uber', w: ['uber', 'bolt', 'taxi', 'cab', 'call uber', 'book uber', 'order uber', 'call a cab', 'book a ride'], on: ['out'], hint: 'uber to <place>', fn: function (a) {
+        if (!a) { openBigMap('Tap where you want to go, then tap Call Uber.'); return ''; }
+        var p = findPlace(a); if (!p) return 'I do not know that place. Open the map and tap it.'; uberOpen(p); return ''; } });
+      VERBS.push({ id: 'bigmap', w: ['map', 'open map', 'big map', 'show map'], on: ['out'], hint: 'map', fn: function () { openBigMap(); return ''; } });
+    })();
+
+    // ------------------------------------------------------------------ talk to real players
+    var TK = { name: null, last: '', timer: null, msgs: [] };
+    function tkBuild() {
+      var el = document.getElementById('tkp'); if (el) return el;
+      el = document.createElement('div'); el.id = 'tkp';
+      el.innerHTML = '<div style="display:flex;align-items:center;gap:6px"><b id="tkname" style="flex:1"></b><button class="bmb" data-t="phone">Phone</button><button class="bmb r" data-t="close">✕</button></div><div id="tklist" style="height:150px;overflow:auto;margin:6px 0;padding:4px;background:rgba(0,0,0,.3);border-radius:8px"></div>' +
+        '<div class="chips"><button data-q="Hi!">Hi!</button><button data-q="How far?">How far?</button><button data-q="Where you dey?">Where you dey?</button><button data-q="Wanna trade?">Wanna trade?</button><button data-q="Let us go to class">Class?</button></div>' +
+        '<div id="tkerr" style="color:#fca5a5;font-size:13px;min-height:16px"></div><div style="display:flex;gap:6px"><input id="tkin" maxlength="280" placeholder="Say something (no links)" autocomplete="off"><button class="bmb g" data-t="send">Send</button></div>';
+      document.body.appendChild(el);
+      var inp = el.querySelector('#tkin'); ['keydown', 'keyup', 'keypress'].forEach(function (ev) { inp.addEventListener(ev, function (e) { e.stopPropagation(); if (ev === 'keydown' && e.key === 'Enter') tkSend(); }); });
+      el.addEventListener('click', function (e) {
+        var t = e.target; if (!t || !t.getAttribute) return; var q = t.getAttribute('data-q'), a = t.getAttribute('data-t');
+        if (q) { inp.value = q; tkSend(); } else if (a === 'send') tkSend(); else if (a === 'close') tkClose(); else if (a === 'phone') { chatWith = String(TK.name || '').toLowerCase(); tkClose(); openPhone('chat'); }
+      });
+      return el;
+    }
+    function tkRender(ms) {
+      var key = ms.map(function (m) { return (m.mine ? 'm' : 't') + m.body; }).join('|'); if (key === TK.last) return; TK.last = key;
+      var lst = document.getElementById('tklist'); if (!lst) return;
+      lst.innerHTML = ms.length ? ms.slice(-40).map(function (m) { return '<div class="bub ' + (m.mine ? 'me' : 'them') + '">' + esc(m.body) + '</div>'; }).join('') : '<div style="opacity:.7;font-size:13px">Say hi. You are standing next to ' + esc(TK.name) + '.</div>';
+      lst.scrollTop = lst.scrollHeight;
+    }
+    function tkPoll() {
+      if (!TK.name) return;
+      NET.thread(TK.name).then(function (ms) { if (!TK.name || !Array.isArray(ms)) return; var had = TK.msgs.length; TK.msgs = ms; tkRender(ms); if (ms.length > had && had && !ms[ms.length - 1].mine) AUD.blip(3); NET.markRead(TK.name); }, function () { /* ignore */ });
+    }
+    function tkOpen(name) {
+      var el = tkBuild(); TK.name = name; TK.last = ''; TK.msgs = []; document.getElementById('tkname').textContent = 'Talking to ' + name; document.getElementById('tkerr').textContent = ''; el.style.display = 'block';
+      var lst = document.getElementById('tklist'); lst.innerHTML = '<div style="opacity:.7;font-size:13px">Loading...</div>'; tkPoll(); if (TK.timer) clearInterval(TK.timer); TK.timer = setInterval(tkPoll, 2500);
+    }
+    function tkClose() { var el = document.getElementById('tkp'); if (el) el.style.display = 'none'; TK.name = null; if (TK.timer) { clearInterval(TK.timer); TK.timer = null; } }
+    function tkSend() {
+      var inp = document.getElementById('tkin'), v = inp.value.trim(); if (!v || !TK.name) return; var err = chatCheck(v); var eEl = document.getElementById('tkerr');
+      if (err) { eEl.textContent = err; return; } inp.value = ''; eEl.textContent = '';
+      NET.send(TK.name, v).then(function (r) { if (r && r.ok) { playerSpeak(v); tkPoll(); } else eEl.textContent = (r && r.error) || 'Could not send.'; }, function () { eEl.textContent = 'Network error.'; });
+    }
+    (function () {
+      var _fc = findCandidate;
+      findCandidate = function () {
+        var base = _fc();
+        if (drv || INT || (base && base.kind !== 'talk' && base.kind !== 'spot' && base.d !== undefined && base.d < 1.5)) return base;
+        var best = null, bd = 4.5; Object.keys(SOC.remotes).forEach(function (k) { var R = SOC.remotes[k]; if (!R.init || !R.h || !R.h.visible) return; var d = Math.hypot(R.x - player.x, R.z - player.z); if (d < bd) { bd = d; best = R; } });
+        if (best && (!base || bd < 3.2 || base.kind === 'spot')) return { kind: 'rplayer', name: best.id, d: bd, txt: 'Talk to ' + best.id };
+        return base;
+      };
+      var _in = interact;
+      interact = function () {
+        if (!DL.on && !mg && !panelOpen && !INT && !working && !lecture && !drv && cand && cand.kind === 'rplayer') { AUD.click(); tkOpen(cand.name); return; }
+        return _in();
+      };
+      VERBS.push({ id: 'tkp', w: ['talk to player', 'chat player'], on: ['out'], hint: 'talk', fn: function () { if (cand && cand.kind === 'rplayer') { tkOpen(cand.name); return ''; } return 'No player is close to you.'; } });
+    })();
+
+    // ------------------------------------------------------------------ per-frame hook
+    function rxTick(dt) {
+      RX.ownT -= dt; if (RX.ownT <= 0) { RX.ownT = 4; if (G.introDone && G.flags.own) ownSync(false); }
+      if (TK.name && !SOC.remotes[TK.name] && !TK.keep) { TK.keep = 1; /* stay open: you can still chat */ }
+      if (BM.open && !BM.drag) { BM.t = (BM.t || 0) - dt; if (BM.t <= 0) { BM.t = 0.5; bmDraw(); } }
+    }
+    RX.uberQuote = uberQuote; RX.uberGo = uberGo; RX.uberOpen = uberOpen; RX.openBigMap = openBigMap; RX.closeBigMap = closeBigMap; RX.BM = BM; RX.bmTap = bmTap; RX.bmAct = bmAct; RX.tkOpen = tkOpen; RX.TK = TK; RX.tkSend = tkSend; RX.ownSync = ownSync; RX.dayIdx = dayIdx; RX.qDoneToday = qDoneToday; RX.UB = UB; RX.eatFn = eatFn; RX.suyaDialog = suyaDialog; RX.hotDialog = hotDialog; RX.shawarmaDialog = shawarmaDialog;
+    RX.cand = function () { return cand; }; RX.findCandidate = function () { return findCandidate(); }; RX.interact = function () { return interact(); }; RX.QD = QD; RX.cook = function () { return cookMeal(); }; RX.dealer = function () { var s = SPOTS.filter(function (q) { return q.id === 'v_dealer'; })[0]; s.fn(); }; RX.stallSpot = function () { return SPOTS.filter(function (q) { return q.id === 'v_food'; })[0]; }; RX.finishLecture = function (L) { return finishLecture(L); }; RX.beginLecture = function (s) { return beginLecture(s); };
 
 
     // ---------- input ----------
@@ -6212,6 +6778,7 @@
       try { wearUpdate(); itemsTick(dt); } catch (e3) { if (!window.__wErr) { window.__wErr = 1; console.error('wear', e3 && e3.stack); } }
       try { partyTick(dt, now); } catch (e2) { if (!window.__ptErr) { window.__ptErr = 1; console.error('partyTick', e2 && e2.stack); } }
       try { voiceTick(dt, now); } catch (e4) { if (!window.__vErr) { window.__vErr = 1; console.error('voice', e4 && e4.stack); } }
+      try { rxTick(dt); } catch (e6) { if (!window.__rErr) { window.__rErr = 1; console.error('ride', e6 && e6.stack); } }
       try { tradeTick(dt); } catch (e5) { if (!window.__tErr) { window.__tErr = 1; console.error('trade', e5 && e5.stack); } }
       updateRainFx(dt); if (INT) rainMesh.visible = false;
       if (!paused) { questTick(); rideTick(); }
@@ -6480,7 +7047,7 @@
     }, function () { if (!G.introDone) showIntro(); });
     pickWeather(); W.ov = W.ovT; W.rain = W.rainT;
     var streakMsg = dailyStreak(); if (streakMsg) setTimeout(function () { banner('Daily allowance', streakMsg); AUD.coin(); }, 3500);
-    window.IFE_DEBUG = { trade: function () { return { PT: PT, ptApply: ptApply, ptEnterVisit: ptEnterVisit, peopleHTML: peopleHTML, tradeTick: tradeTick, ptClaim: ptClaim, ptSetCash: ptSetCash, ptRedraw: ptRedraw, ptStash: ptStash, setNet: function (m) { NET.mode = m; } }; }, voice: function () { return { VEH: VEH, VT: VT, VPLACE: VPLACE, EV: EV, SOUND_FILES: SOUND_FILES, matchOn: matchOn(), serviceOn: serviceOn(), callOn: callOn(), voiceTick: voiceTick, evSpawn: evSpawn, evTick: evTick, marketDialog: marketDialog, chapelDialog: chapelDialog, mosqueDialog: mosqueDialog, sportsDialog: sportsDialog, VOX: VOX }; }, AGENTS: AGENTS, crowdStats: function () { return { active: activeCount, drawn: drawnCount, total: CROWD_N }; }, COINS: COINS, startMG: startMG, mgState: function () { return mg; }, mgPress: mgPress, mgChoose: mgChoose, runMG: runMG, NET: NET, CLASSES: CLASSES, FURN: FURN, HOMES: HOMES, homeDialog: homeDialog, jobGate: jobGate, startExam: startExam, finishIntro: function (n, f, c, o, lv) { return finishIntro(n, f, c, o, lv); }, HALLS: HALLS, allocateHome: allocateHome, roomResidents: roomResidents, goCorridor: goCorridor, hallGate: hallGate, hallOf: hallOf, homeById: homeById, enterOwnRoom: enterOwnRoom, knockRoom: knockRoom, blockOf: blockOf, SLV: SLV, COURSES: COURSES, orientLeft: orientLeft, taskDialog: taskDialog, hallEligible: hallEligible, pending: function () { return PENDING; }, polMul: polMul, isExamWeek: isExamWeek, evActive: evActive, evNext: evNext, attendEvent: attendEvent, worthNow: worthNow, POLICIES: POLICIES, sessionsFor: sessionsFor, drawQs: drawQs, rollClassLocal: rollClassLocal, comfortScore: comfortScore, powered: powered, needsTick: needsTick, doSleep: doSleep, sellFurn: sellFurn, rentOf: rentOf, mySpot: mySpot, barred: barred, QB: QB, phone: function () { return { tab: phoneTab, open: panelOpen }; }, closePhone: closePhone, jobSpots: function () { return SPOTS.filter(function (s) { return s.type === 'job'; }); }, flushNet: function () { return NET.flush(); }, introOpen: function () { return introOpen; }, buyFurn: buyFurn, placeFurn: placeFurn, allowance: allowance, housekeeping: housekeeping, openPhone: openPhone, flexCanvas: function () { return flexCanvas(); }, ACH: ACH, player: player, spots: SPOTS, col: COL, tryInteract: interact, chunks: chunkList,
+    window.IFE_DEBUG = { ridex: function () { return RX; }, trade: function () { return { PT: PT, ptApply: ptApply, ptEnterVisit: ptEnterVisit, peopleHTML: peopleHTML, tradeTick: tradeTick, ptClaim: ptClaim, ptSetCash: ptSetCash, ptRedraw: ptRedraw, ptStash: ptStash, setNet: function (m) { NET.mode = m; } }; }, voice: function () { return { VEH: VEH, VT: VT, VPLACE: VPLACE, EV: EV, SOUND_FILES: SOUND_FILES, matchOn: matchOn(), serviceOn: serviceOn(), callOn: callOn(), voiceTick: voiceTick, evSpawn: evSpawn, evTick: evTick, marketDialog: marketDialog, chapelDialog: chapelDialog, mosqueDialog: mosqueDialog, sportsDialog: sportsDialog, VOX: VOX }; }, AGENTS: AGENTS, crowdStats: function () { return { active: activeCount, drawn: drawnCount, total: CROWD_N }; }, COINS: COINS, startMG: startMG, mgState: function () { return mg; }, mgPress: mgPress, mgChoose: mgChoose, runMG: runMG, NET: NET, CLASSES: CLASSES, FURN: FURN, HOMES: HOMES, homeDialog: homeDialog, jobGate: jobGate, startExam: startExam, finishIntro: function (n, f, c, o, lv) { return finishIntro(n, f, c, o, lv); }, HALLS: HALLS, allocateHome: allocateHome, roomResidents: roomResidents, goCorridor: goCorridor, hallGate: hallGate, hallOf: hallOf, homeById: homeById, enterOwnRoom: enterOwnRoom, knockRoom: knockRoom, blockOf: blockOf, SLV: SLV, COURSES: COURSES, orientLeft: orientLeft, taskDialog: taskDialog, hallEligible: hallEligible, pending: function () { return PENDING; }, polMul: polMul, isExamWeek: isExamWeek, evActive: evActive, evNext: evNext, attendEvent: attendEvent, worthNow: worthNow, POLICIES: POLICIES, sessionsFor: sessionsFor, drawQs: drawQs, rollClassLocal: rollClassLocal, comfortScore: comfortScore, powered: powered, needsTick: needsTick, doSleep: doSleep, sellFurn: sellFurn, rentOf: rentOf, mySpot: mySpot, barred: barred, QB: QB, phone: function () { return { tab: phoneTab, open: panelOpen }; }, closePhone: closePhone, jobSpots: function () { return SPOTS.filter(function (s) { return s.type === 'job'; }); }, flushNet: function () { return NET.flush(); }, introOpen: function () { return introOpen; }, buyFurn: buyFurn, placeFurn: placeFurn, allowance: allowance, housekeeping: housekeeping, openPhone: openPhone, flexCanvas: function () { return flexCanvas(); }, ACH: ACH, player: player, spots: SPOTS, col: COL, tryInteract: interact, chunks: chunkList,
       LM: LM, state: function () { return { cash: G.cash, energy: G.energy }; }, G: G, W: W, DL: DL, TALK: TALK, QD: QD, npcs: npcs, labels: labels,
       setYaw: function (v) { yaw = v; }, setCam: function (v) { camDist = v; }, setCity: function (v) { cityDist = v; }, veh: VEH, scene: scene, renderer: renderer, camera: camera, inBuilding: inBuilding,
       close: closeDlg, enter: enterVehicle, exit: exitVehicle, drv: function () { return drv; }, pick: pickChoice, openDlg: openDlg, advance: advanceDlg, setWeather: setWeather, nextSession: nextSession, startLecture: startLecture,
