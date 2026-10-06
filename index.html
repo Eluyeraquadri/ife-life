@@ -2777,7 +2777,7 @@
     // Two backends behind one API: LOCAL (works offline, with bot players) and SUPABASE (real accounts, server-side money).
     // To go online, fill in these two constants (see SETUP.md). Leave them empty to stay in local mode.
     // ============================================================
-    var SUPABASE_URL = '', SUPABASE_ANON = '';
+    var SUPABASE_URL = 'https://afyozffalesybsersynl.supabase.co', SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmeW96ZmZhbGVzeWJzZXJzeW5sIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzMTUzNjUsImV4cCI6MjEwNjg5MTM2NX0.7kgQyTMwRW7SNhy6KmbP0Igt3PnIevh4fB90428pB5M';
     var SPEND_KINDS = { food: 1, rent: 1, furniture: 1, shop: 1, fine: 1, fee: 1, gift: 1 };
     var PENDING = [], lastSync = 0, ledgerBusy = false;
     function isoWeekKey(d) {
