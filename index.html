@@ -3615,9 +3615,9 @@
       });
       drawSmall(R, tbl, ox, oz, W, D);
       var spotRef = null; SPOTS.forEach(function (s) { if (s.type === 'home' && s.homeId === h.id) spotRef = s; });
-      if (bed) ispot(R, bed.x, bed.z + bed.d / 2 + 1.0, 'Sleep / room options', function () { openDlg(h.name, homeDialog(spotRef), 8); }, 2.4);
+      if (opt.hostName) { /* a visitor: no bed or furnishing options */ } else if (bed) ispot(R, bed.x, bed.z + bed.d / 2 + 1.0, 'Sleep / room options', function () { openDlg(h.name, homeDialog(spotRef), 8); }, 2.4);
       else ispot(R, ox - W / 2 + 2.4, oz - D / 2 + 2.4, 'Room options (no bed yet)', function () { openDlg(h.name, homeDialog(spotRef), 8); }, 2.4);
-      ispot(R, ox, oz + 0.2, 'Furnish this room (B)', function () { openPhone('room'); }, 2.2);
+      if (!opt.hostName) ispot(R, ox, oz + 0.2, 'Furnish this room (B)', function () { openPhone('room'); }, 2.2);
       R.camDist = Math.max(W, D) * 1.35 + 5; R.crowd = 0; return R;
     }
     function buildRoom(kind, opt) {
@@ -4022,7 +4022,7 @@
         rcol(R, bx, bz, 2.0, 3.4);
         for (var lv = 0; lv < 2; lv++) {
           var bedNo = i * 2 + lv + 1; if (bedNo > beds) continue;
-          var y = 0.5 + lv * 1.0, isMine = !opt.visit && opt.rm.bed === bedNo, occ = res[bedNo];
+          var y = 0.5 + lv * 1.0, isMine = !opt.visit && !opt.hostName && opt.rm.bed === bedNo, occ = res[bedNo];
           ib(g, 0x7a5a3a, bx, y, bz, 1.7, 0.12, 3.2); ib(g, isMine ? 0x3b82f6 : (occ ? 0x9bb08f : 0xdad4c3), bx, y + 0.12, bz, 1.55, 0.22, 3.0);
           if (occ) ib(g, 0xffffff, bx, y + 0.34, bz - 1.2, 0.9, 0.16, 0.5);
           if (isMine) { iplane(g, 1.4, 0.4, drawSign('YOUR BED', '#1d4ed8'), bx, y + 0.9, bz + 1.62, 0); ispot(R, bx, bz + 2.6, 'Your bed: sleep and room options', function () { openDlg(h.name, homeDialog(h.spotRef || homeSpotFor(h)), 8); }, 2.2); }
@@ -4046,8 +4046,8 @@
       }
       if (!opt.visit) {
         var ownBox = ib(g, 0x6b5a4a, gx0 + 2.8, 0, oz + 3.6, 5.6, 0.04, 3.4); ownBox.material = imat(0xc9b896);
-        iplane(g, 2.6, 0.5, drawSign('YOUR SPACE', '#6b5a4a'), gx0 + 2.8, 0.06, oz + 5.2, 0).rotation.x = -Math.PI / 2;
-        ispot(R, gx0 + 2.8, oz + 2.8, 'Furnish your space (B)', function () { openPhone('room'); }, 2.4);
+        iplane(g, 2.6, 0.5, drawSign(opt.hostName ? (opt.hostName.slice(0, 12).toUpperCase() + "'S SPACE") : 'YOUR SPACE', '#6b5a4a'), gx0 + 2.8, 0.06, oz + 5.2, 0).rotation.x = -Math.PI / 2;
+        if (!opt.hostName) ispot(R, gx0 + 2.8, oz + 2.8, 'Furnish your space (B)', function () { openPhone('room'); }, 2.4);
       }
       R.sp = function () { return { x: ox + W / 2 - 2, z: oz + D / 2 - 2 }; };
       return R;
@@ -5417,6 +5417,253 @@
       }
     }
 
+    // =====================================================================================
+    // PEOPLE: everyone online, send money (email accounts only, 5,000,000 a day), item trades, house visits.
+    // The server (supabase_schema.sql) decides all money. This file only shows it and sends requests.
+    // =====================================================================================
+    var DAILY_SEND = 5000000;
+    var PT = { online: [], oin: [], log: [], em: false, left: DAILY_SEND, busy: false, pollT: 3, pollBusy: false, sawBusy: false, claiming: {}, vinShown: {}, visitGo: 0, visitMsg: {},
+      to: '', amt: '', note: '', sTo: '', sItem: '', sQty: '1', sPrice: '', msg: '', err: false, timer: null, seenOffer: {}, lastVout: '' };
+    function ptNo() { return Promise.resolve({ ok: false, error: 'Online accounts only. Turn on online mode first (see SETUP.md).' }); }
+    ONLINE.social = function () { return rpc('social_poll'); };
+    ONLINE.onlineList = function () { return rpc('online_players'); };
+    ONLINE.sendMoney = function (to, amt, note) { return rpc('send_money', { p_to: to, p_amount: amt, p_note: note }); };
+    ONLINE.makeOffer = function (to, item, qty, price) { return rpc('make_offer', { p_to: to, p_item: item, p_qty: qty, p_price: price }); };
+    ONLINE.answerOffer = function (id, yes) { return rpc('answer_offer', { p_id: id, p_accept: !!yes }); };
+    ONLINE.cancelOffer = function (id) { return rpc('cancel_offer', { p_id: id }); };
+    ONLINE.claimOffer = function (id) { return rpc('claim_offer', { p_id: id }); };
+    ONLINE.requestVisit = function (to) { return rpc('request_visit', { p_to: to }); };
+    ONLINE.answerVisit = function (id, yes) { return rpc('answer_visit', { p_id: id, p_accept: !!yes }); };
+    ONLINE.peekRoom = function (name) { return rpc('peek_room', { p_name: name }); };
+    ONLINE.transferLog = function () { return rpc('transfer_log'); };
+    ['social', 'onlineList', 'sendMoney', 'makeOffer', 'answerOffer', 'cancelOffer', 'claimOffer', 'requestVisit', 'answerVisit', 'peekRoom', 'transferLog'].forEach(function (k) { LOCAL[k] = ptNo; });
+
+    function ptDrift() { return PENDING.reduce(function (s, e) { return s + (SPEND_KINDS[e.k] ? -e.a : e.a); }, 0); }
+    function ptSetCash(c) { _cash = Math.max(0, (+c || 0) + ptDrift()); }
+    function ptMsg(m, err) { PT.msg = m || ''; PT.err = !!err; }
+    function ptIsOnline() { return NET.mode === 'online' && NET.ready && !!NET.me; }
+    function ptItemName(id) { var f = furnById(id); return f ? (f.n || f.name || id) : id; }
+    function ptAvail(id) { var f = furnById(id), n = 0; if (f && f.small) return Math.max(0, G.inv[id] | 0); G.placed.forEach(function (p) { if (p.id === id) n++; }); return Math.max(0, (G.inv[id] | 0) - n); }   // small items sit on shelves by themselves, so they are always free to sell
+
+    // ---------- receiving items (a paid purchase, or an item coming back from a refused offer) ----------
+    function ptClaim(id) {
+      if (PT.claiming[id]) return; PT.claiming[id] = 1;
+      NET.claimOffer(id).then(function (r) {
+        if (r && r.ok && furnById(r.item)) {
+          G.inv[r.item] = Math.min(99, (G.inv[r.item] | 0) + (r.qty | 0)); saveGame(); AUD.coin();
+          show(r.back ? ('Back in your bag: ' + r.qty + ' x ' + ptItemName(r.item) + ' (' + r.who + ' did not take it).') : ('You got ' + r.qty + ' x ' + ptItemName(r.item) + ' from ' + r.who + '. Check your Room tab.'), 5000);
+        }
+        if (!(r && r.ok === false && r.error)) { /* done */ }
+        setTimeout(function () { delete PT.claiming[id]; }, 4000);
+      }, function () { delete PT.claiming[id]; });
+    }
+
+    // ---------- house visits ----------
+    function ptKnock(v) {
+      if (PT.vinShown[v.id] || DL.on || introOpen || lecture || mg) return;
+      PT.vinShown[v.id] = 1; AUD.door();
+      openDlg('Knock knock', Nd(v.from + ' is knocking at your door. Let them in?', [
+        C('Let them in', function () { NET.answerVisit(v.id, true); return Nd('Door open. Go to your own room to meet ' + v.from + '.', [C('Ok', null)]); }),
+        C('Not now', function () { NET.answerVisit(v.id, false); return null; })]), 41);
+    }
+    function ptInt(v, lo, hi, d) { v = Math.floor(+v); return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; }
+    function ptEnterVisit(r) {
+      try {
+        var hm = r.home && r.home.id ? homeById(String(r.home.id)) : null; if (!hm) { show(r.name + ' has no room set up yet.', 3500); return true; }
+        var rm = { b: 'A', f: 0, n: 1, bed: 1 }, rr = r.home.rm || {};
+        if (hm.hall) {
+          var b = blockOf(hm.hall, String(rr.b || '')) || hm.hall.blocks[0];
+          rm = { b: b.id, f: ptInt(rr.f, b.kind === 'storey' ? 1 : 0, b.kind === 'storey' ? b.floors : 0, b.kind === 'storey' ? 1 : 0), n: ptInt(rr.n, 1, b.rpf, 1), bed: ptInt(rr.bed, 1, b.beds, 1) };
+        }
+        var pl = [], inv = {};
+        (Array.isArray(r.placed) ? r.placed : []).slice(0, 40).forEach(function (p) { if (p && typeof p.id === 'string' && furnById(p.id)) pl.push({ id: p.id, x: ptInt(p.x, 0, 30, 0), y: ptInt(p.y, 0, 30, 0) }); });
+        if (r.inv && typeof r.inv === 'object') Object.keys(r.inv).slice(0, 80).forEach(function (k) { if (furnById(k)) inv[k] = ptInt(r.inv[k], 0, 20, 0); });
+        if (INT) { exitInterior(); if (INT) return false; }
+        if (DL.on || lecture || mg || working || drv) return false;
+        var key = hm.hall ? ('room:' + hm.id + ':' + rm.b + (rm.f | 0) + '.' + (rm.n | 0)) : ('home:' + r.name);
+        advanceTime(10);
+        enterInterior('room', { home: hm, rm: rm, hostName: String(r.name), hostKey: key, hostPlaced: pl, hostInv: inv, ret: { x: player.x, z: player.z } });
+        show('You are in ' + r.name + "'s room. Say hi!", 4500);
+        return true;
+      } catch (e) { show('Could not open that room.', 3000); return true; }
+    }
+    function ptVisitGo(vo) {
+      if (PT.visitGo === vo.id) return; if (DL.on || lecture || mg || working || introOpen) return;
+      PT.visitGo = vo.id;
+      NET.peekRoom(vo.to).then(function (r) {
+        if (!r || !r.ok) { show((r && r.error) || 'Could not enter.', 3500); return; }
+        if (!ptEnterVisit(r)) PT.visitGo = 0;
+      }, function () { PT.visitGo = 0; });
+    }
+    var _bR = buildRoom;
+    buildRoom = function (kind, opt) {                    // draw the HOST's furniture, not yours
+      if (kind === 'room' && opt && opt.hostName) {
+        var sp = G.placed, si = G.inv; G.placed = opt.hostPlaced || []; G.inv = opt.hostInv || {};
+        try { return _bR(kind, opt); } finally { G.placed = sp; G.inv = si; }
+      }
+      return _bR(kind, opt);
+    };
+    var _prk = presRoomKey;
+    presRoomKey = function () {
+      if (INT && INT.key === 'room' && INT.opt) {
+        var o = INT.opt; if (o.hostKey) return o.hostKey;
+        if (o.home && !o.home.hall && NET.me && NET.me.name) return 'home:' + NET.me.name;       // a lodge room is private to its owner
+      }
+      return _prk();
+    };
+
+    // ---------- the poll (every ~5 seconds) ----------
+    function ptApply(r) {
+      if (!r || !r.ok) return;
+      PT.em = !!r.em; PT.left = +r.left;
+      if (!ledgerBusy && !PT.sawBusy) ptSetCash(r.cash);
+      (r.tin || []).forEach(function (t) {
+        AUD.coin();
+        show(t.kind === 'trade' ? (t.from + ' paid ' + naira(t.amt) + ' for ' + t.note + '.') : (t.from + ' sent you ' + naira(t.amt) + (t.note ? ': "' + t.note + '"' : '') + '.'), 6000);
+      });
+      PT.oin = (r.oin || []).filter(function (o) { return furnById(o.item); });
+      PT.oin.forEach(function (o) { if (!PT.seenOffer[o.id]) { PT.seenOffer[o.id] = 1; show(o.from + ' offers ' + o.qty + ' x ' + ptItemName(o.item) + ' for ' + naira(o.price) + '. Open the People tab.', 6000); } });
+      (r.oret || []).forEach(function (id) { ptClaim(id); });
+      (r.vin || []).forEach(function (v) { ptKnock(v); });
+      var vo = r.vout;
+      if (vo) {
+        var tag = vo.id + ':' + vo.status;
+        if (vo.status === 'accepted') ptVisitGo(vo);
+        else if (tag !== PT.lastVout && vo.status === 'declined') show(vo.to + ' did not open the door.', 3500);
+        else if (tag !== PT.lastVout && vo.status === 'expired') show('No answer from ' + vo.to + '.', 3500);
+        PT.lastVout = tag;
+      }
+      if (panelOpen && phoneTab === 'people') ptRedraw();
+    }
+    function tradeTick(dt) {
+      if (!ptIsOnline() || !G.introDone) return;
+      if (ledgerBusy) PT.sawBusy = true;
+      PT.pollT -= dt; if (PT.pollT > 0 || PT.pollBusy) return; PT.pollT = 5; PT.pollBusy = true; PT.sawBusy = ledgerBusy;
+      NET.social().then(function (r) { PT.pollBusy = false; ptApply(r); }, function () { PT.pollBusy = false; });
+    }
+    function pollNow() { PT.pollT = 0; }
+    function ptFlush() {                                  // wait for any ledger call in flight, then flush what is left, so the server sees your real cash
+      return new Promise(function (resolve) { var n = 0; (function wait() { if (ledgerBusy && n++ < 12) { setTimeout(wait, 250); return; } resolve(); })(); }).then(function () { return NET.flush(); });
+    }
+
+    // ---------- the People tab ----------
+    TABS.splice(3, 0, ['people', 'People']);
+    var _renderPhone = renderPhone;
+    renderPhone = function () {
+      _renderPhone();
+      if (PT.timer) { clearInterval(PT.timer); PT.timer = null; }
+      if (phoneTab !== 'people') return;
+      ptRedraw(); ptFetch();
+      PT.timer = setInterval(function () { if (!(panelOpen && phoneTab === 'people')) { clearInterval(PT.timer); PT.timer = null; return; } ptFetch(); }, 8000);
+    };
+    function ptFetch() {
+      if (!ptIsOnline()) return;
+      NET.onlineList().then(function (r) { if (Array.isArray(r)) { PT.online = r; ptRedraw(); } });
+      NET.transferLog().then(function (r) { if (Array.isArray(r)) { PT.log = r; ptRedraw(); } });
+    }
+    function ptStash() {
+      var g = function (id) { var e = document.getElementById(id); return e ? e.value : null; }, v;
+      if ((v = g('pt-to')) !== null) PT.to = v; if ((v = g('pt-amt')) !== null) PT.amt = v; if ((v = g('pt-note')) !== null) PT.note = v;
+      if ((v = g('pt-sto')) !== null) PT.sTo = v; if ((v = g('pt-item')) !== null) PT.sItem = v; if ((v = g('pt-qty')) !== null) PT.sQty = v; if ((v = g('pt-price')) !== null) PT.sPrice = v;
+    }
+    function ptDraw() { var body = document.getElementById('phbody'); if (body && phoneTab === 'people') body.innerHTML = peopleHTML(); }
+    function ptRedraw(force) {
+      var body = document.getElementById('phbody'); if (!body || phoneTab !== 'people') return;
+      var a = document.activeElement; if (!force && a && a.tagName === 'INPUT' && elPhone.contains(a) && a.value !== '') return;    // do not wipe what you are typing
+      ptStash(); body.innerHTML = peopleHTML();
+    }
+    function ptPlace(lv, x, z, inn) { return inn ? 'in a room' : (Math.hypot(x - CORE.x, z - CORE.z) < 900 ? 'on campus' : 'in town'); }
+    function peopleHTML() {
+      if (NET.mode !== 'online') return '<div class="note">People, money transfers, trades and visits need online mode. See SETUP.md.</div>';
+      var h = '<div class="row"><span>Your cash</span><span>' + naira(G.cash) + '</span></div>' +
+        '<div class="row"><span>You can still send today</span><span>' + naira(PT.left) + ' / ' + naira(DAILY_SEND) + '</span></div>';
+      if (!PT.em) h += '<div class="note err">Money and trades need an account with a confirmed email. Open the Account tab, save your account with an email, then click the link in the email.</div>';
+      var inp = 'style="width:100%;margin-bottom:6px;box-sizing:border-box"';
+      h += '<h3>Send money</h3><input id="pt-to" ' + inp + ' placeholder="Username" value="' + esc(PT.to) + '" autocapitalize="off">' +
+        '<input id="pt-amt" ' + inp + ' placeholder="Amount (naira)" inputmode="numeric" value="' + esc(PT.amt) + '">' +
+        '<input id="pt-note" ' + inp + ' maxlength="40" placeholder="Note (optional)" value="' + esc(PT.note) + '">' +
+        '<button class="b" data-act="p_send"' + (PT.busy ? ' disabled' : '') + '>Send money</button>';
+      var items = Object.keys(G.inv).filter(function (id) { return furnById(id) && ptAvail(id) > 0; });
+      h += '<h3>Sell an item</h3>';
+      if (!items.length) h += '<div class="note">Nothing to sell. Furniture placed in your room cannot be sold: pick it up first (Room tab).</div>';
+      else {
+        h += '<input id="pt-sto" ' + inp + ' placeholder="Buyer username" value="' + esc(PT.sTo) + '" autocapitalize="off"><select id="pt-item" ' + inp + '>' +
+          items.map(function (id) { return '<option value="' + esc(id) + '"' + (PT.sItem === id ? ' selected' : '') + '>' + esc(ptItemName(id)) + ' (you have ' + ptAvail(id) + ')</option>'; }).join('') + '</select>' +
+          '<input id="pt-qty" ' + inp + ' placeholder="How many" inputmode="numeric" value="' + esc(PT.sQty) + '"><input id="pt-price" ' + inp + ' placeholder="Total price (0 = free gift)" inputmode="numeric" value="' + esc(PT.sPrice) + '">' +
+          '<button class="b" data-act="p_offer"' + (PT.busy ? ' disabled' : '') + '>Make offer</button>';
+      }
+      if (PT.oin.length) h += '<h3>Offers for you</h3>' + PT.oin.map(function (o) {
+        return '<div class="row"><span>' + esc(o.from) + ': ' + o.qty + ' x ' + esc(ptItemName(o.item)) + ' for ' + naira(o.price) + '</span><span><button class="b" data-act="p_buy" data-id="' + o.id + '">Buy</button> <button class="b grey" data-act="p_no" data-id="' + o.id + '">No</button></span></div>';
+      }).join('');
+      if (PT.msg) h += '<div class="note ' + (PT.err ? 'err' : 'okk') + '">' + esc(PT.msg) + '</div>';
+      h += '<h3>People online (' + PT.online.length + ')</h3>';
+      if (!PT.online.length) h += '<div class="note">Nobody else is online right now.</div>';
+      h += PT.online.map(function (p) {
+        var nm = esc(p.u);
+        return '<div class="row" style="flex-wrap:wrap"><span><b>' + nm + '</b> ' + esc(lvName(p.lv)) + (p.em ? ' ✉' : '') + '<br><small style="opacity:.7">' + ptPlace(p.lv, p.x, p.z, p.in) + '</small></span><span style="display:flex;gap:4px;flex-wrap:wrap">' +
+          '<button class="b" data-act="p_pay" data-w="' + nm + '">Pay</button><button class="b" data-act="p_sell" data-w="' + nm + '">Sell</button>' +
+          '<button class="b" data-act="p_visit" data-w="' + nm + '">Visit</button><button class="b" data-act="p_chat" data-w="' + nm + '">Chat</button>' +
+          (p.in ? '' : '<button class="b grey" data-act="p_find" data-w="' + nm + '">Find</button>') + '</span></div>';
+      }).join('');
+      if (PT.log.length) h += '<h3>Recent money</h3>' + PT.log.map(function (t) {
+        return '<div class="row"><span>' + (t.out ? 'To ' : 'From ') + esc(t.who) + (t.kind === 'trade' ? ' (trade)' : '') + (t.note ? ' <small style="opacity:.7">' + esc(t.note) + '</small>' : '') + '</span><span>' + (t.out ? '-' : '+') + naira(t.amt) + '</span></div>';
+      }).join('');
+      return h;
+    }
+    function ptAmount(s) { var n = Math.floor(+String(s).replace(/[, ₦]/g, '')); return isFinite(n) ? n : NaN; }
+    elPhone.addEventListener('click', function (e) {
+      var el = attr(e.target, 'data-act'); if (!el) return; var act = el.getAttribute('data-act'); if (act.indexOf('p_') !== 0) return;
+      var w = el.getAttribute('data-w'), id = +el.getAttribute('data-id'); AUD.click(); ptStash();
+      if (act === 'p_pay') { PT.to = w; ptMsg(''); ptDraw(); var ea = document.getElementById('pt-amt'); if (ea) ea.focus(); return; }
+      if (act === 'p_sell') { PT.sTo = w; ptMsg(''); ptDraw(); return; }
+      if (act === 'p_chat') { chatWith = String(w).toLowerCase(); phoneTab = 'chat'; renderPhone(); return; }
+      if (act === 'p_find') { var p = PT.online.filter(function (q) { return q.u === w; })[0]; if (p && !p.in) { setDest({ x: p.x, z: p.z, label: p.u }); show('Beacon set to ' + p.u + '. They move, so check again.', 3500); closePhone(); } return; }
+      if (act === 'p_visit') { NET.requestVisit(w).then(function (r) { ptMsg(r && r.ok ? ('You knocked on ' + w + "'s door. Waiting for an answer...") : ((r && r.error) || 'Could not knock.'), !(r && r.ok)); if (r && r.ok) { PT.visitGo = 0; pollNow(); } ptDraw(); }); return; }
+      if (PT.busy) return;
+      if (act === 'p_send') {
+        var amt = ptAmount(PT.amt), to = String(PT.to || '').trim();
+        if (!to) { ptMsg('Type the username.', true); ptDraw(); return; }
+        if (!(amt >= 1) || amt > DAILY_SEND) { ptMsg('Type an amount from 1 to ' + naira(DAILY_SEND) + '.', true); ptDraw(); return; }
+        if (amt > G.cash) { ptMsg('You do not have that much cash.', true); ptDraw(); return; }
+        PT.busy = true; ptMsg('Sending...'); ptDraw();
+        ptFlush().then(function () { return NET.sendMoney(to, amt, PT.note); }).then(function (r) {
+          PT.busy = false;
+          if (r && r.ok) { ptSetCash(r.cash); PT.left = +r.left; PT.amt = ''; PT.note = ''; AUD.coin(); ptMsg('Sent ' + naira(amt) + ' to ' + r.to + '.'); saveGame(); }
+          else ptMsg((r && r.error) || 'Could not send.', true);
+          ptDraw(); ptFetch();
+        });
+        return;
+      }
+      if (act === 'p_offer') {
+        var item = PT.sItem || (document.getElementById('pt-item') || {}).value, qty = ptAmount(PT.sQty), price = ptAmount(PT.sPrice), to2 = String(PT.sTo || '').trim();
+        if (!to2) { ptMsg('Type the buyer username.', true); ptDraw(); return; }
+        if (!item || !furnById(item)) { ptMsg('Pick an item.', true); ptDraw(); return; }
+        if (!(qty >= 1) || qty > 20 || qty > ptAvail(item)) { ptMsg('You can offer 1 to ' + Math.min(20, ptAvail(item)) + ' of that.', true); ptDraw(); return; }
+        if (!(price >= 0) || price > DAILY_SEND) { ptMsg('Price must be from 0 to ' + naira(DAILY_SEND) + '.', true); ptDraw(); return; }
+        PT.busy = true; G.inv[item] -= qty; if (G.inv[item] <= 0) delete G.inv[item]; saveGame();          // the item leaves your bag first, so it cannot be sold twice
+        NET.makeOffer(to2, item, qty, price).then(function (r) {
+          PT.busy = false;
+          if (r && r.ok) { PT.sQty = '1'; PT.sPrice = ''; ptMsg('Offer sent to ' + to2 + '. If they say no, the item comes back to your bag.'); }
+          else { G.inv[item] = (G.inv[item] | 0) + qty; saveGame(); ptMsg((r && r.error) || 'Could not make the offer.', true); }
+          ptDraw();
+        });
+        return;
+      }
+      if (act === 'p_buy') {
+        var of = PT.oin.filter(function (o) { return o.id === id; })[0]; if (!of) return;
+        if (of.price > G.cash) { ptMsg('You do not have enough cash for that.', true); ptDraw(); return; }
+        PT.busy = true; ptMsg('Paying...'); ptDraw();
+        ptFlush().then(function () { return NET.answerOffer(id, true); }).then(function (r) {
+          PT.busy = false;
+          if (r && r.ok) { ptSetCash(r.cash); PT.oin = PT.oin.filter(function (o) { return o.id !== id; }); ptClaim(id); ptMsg('Bought. Paid ' + naira(of.price) + '.'); saveGame(); }
+          else ptMsg((r && r.error) || 'Could not buy.', true);
+          ptDraw(); pollNow();
+        });
+        return;
+      }
+      if (act === 'p_no') { NET.answerOffer(id, false).then(function () { PT.oin = PT.oin.filter(function (o) { return o.id !== id; }); ptMsg('Offer refused.'); ptDraw(); }); return; }
+    });
+
 
     // ============================================================
     // ENGAGEMENT: aura (XP) and levels, achievements, coins, job mini-games, daily streak, campus gist
@@ -5965,6 +6212,7 @@
       try { wearUpdate(); itemsTick(dt); } catch (e3) { if (!window.__wErr) { window.__wErr = 1; console.error('wear', e3 && e3.stack); } }
       try { partyTick(dt, now); } catch (e2) { if (!window.__ptErr) { window.__ptErr = 1; console.error('partyTick', e2 && e2.stack); } }
       try { voiceTick(dt, now); } catch (e4) { if (!window.__vErr) { window.__vErr = 1; console.error('voice', e4 && e4.stack); } }
+      try { tradeTick(dt); } catch (e5) { if (!window.__tErr) { window.__tErr = 1; console.error('trade', e5 && e5.stack); } }
       updateRainFx(dt); if (INT) rainMesh.visible = false;
       if (!paused) { questTick(); rideTick(); }
       if (lecture && !DL.on) { updateLecture(dt); }
@@ -6232,7 +6480,7 @@
     }, function () { if (!G.introDone) showIntro(); });
     pickWeather(); W.ov = W.ovT; W.rain = W.rainT;
     var streakMsg = dailyStreak(); if (streakMsg) setTimeout(function () { banner('Daily allowance', streakMsg); AUD.coin(); }, 3500);
-    window.IFE_DEBUG = { voice: function () { return { VEH: VEH, VT: VT, VPLACE: VPLACE, EV: EV, SOUND_FILES: SOUND_FILES, matchOn: matchOn(), serviceOn: serviceOn(), callOn: callOn(), voiceTick: voiceTick, evSpawn: evSpawn, evTick: evTick, marketDialog: marketDialog, chapelDialog: chapelDialog, mosqueDialog: mosqueDialog, sportsDialog: sportsDialog, VOX: VOX }; }, AGENTS: AGENTS, crowdStats: function () { return { active: activeCount, drawn: drawnCount, total: CROWD_N }; }, COINS: COINS, startMG: startMG, mgState: function () { return mg; }, mgPress: mgPress, mgChoose: mgChoose, runMG: runMG, NET: NET, CLASSES: CLASSES, FURN: FURN, HOMES: HOMES, homeDialog: homeDialog, jobGate: jobGate, startExam: startExam, finishIntro: function (n, f, c, o, lv) { return finishIntro(n, f, c, o, lv); }, HALLS: HALLS, allocateHome: allocateHome, roomResidents: roomResidents, goCorridor: goCorridor, hallGate: hallGate, hallOf: hallOf, homeById: homeById, enterOwnRoom: enterOwnRoom, knockRoom: knockRoom, blockOf: blockOf, SLV: SLV, COURSES: COURSES, orientLeft: orientLeft, taskDialog: taskDialog, hallEligible: hallEligible, pending: function () { return PENDING; }, polMul: polMul, isExamWeek: isExamWeek, evActive: evActive, evNext: evNext, attendEvent: attendEvent, worthNow: worthNow, POLICIES: POLICIES, sessionsFor: sessionsFor, drawQs: drawQs, rollClassLocal: rollClassLocal, comfortScore: comfortScore, powered: powered, needsTick: needsTick, doSleep: doSleep, sellFurn: sellFurn, rentOf: rentOf, mySpot: mySpot, barred: barred, QB: QB, phone: function () { return { tab: phoneTab, open: panelOpen }; }, closePhone: closePhone, jobSpots: function () { return SPOTS.filter(function (s) { return s.type === 'job'; }); }, flushNet: function () { return NET.flush(); }, introOpen: function () { return introOpen; }, buyFurn: buyFurn, placeFurn: placeFurn, allowance: allowance, housekeeping: housekeeping, openPhone: openPhone, flexCanvas: function () { return flexCanvas(); }, ACH: ACH, player: player, spots: SPOTS, col: COL, tryInteract: interact, chunks: chunkList,
+    window.IFE_DEBUG = { trade: function () { return { PT: PT, ptApply: ptApply, ptEnterVisit: ptEnterVisit, peopleHTML: peopleHTML, tradeTick: tradeTick, ptClaim: ptClaim, ptSetCash: ptSetCash, ptRedraw: ptRedraw, ptStash: ptStash, setNet: function (m) { NET.mode = m; } }; }, voice: function () { return { VEH: VEH, VT: VT, VPLACE: VPLACE, EV: EV, SOUND_FILES: SOUND_FILES, matchOn: matchOn(), serviceOn: serviceOn(), callOn: callOn(), voiceTick: voiceTick, evSpawn: evSpawn, evTick: evTick, marketDialog: marketDialog, chapelDialog: chapelDialog, mosqueDialog: mosqueDialog, sportsDialog: sportsDialog, VOX: VOX }; }, AGENTS: AGENTS, crowdStats: function () { return { active: activeCount, drawn: drawnCount, total: CROWD_N }; }, COINS: COINS, startMG: startMG, mgState: function () { return mg; }, mgPress: mgPress, mgChoose: mgChoose, runMG: runMG, NET: NET, CLASSES: CLASSES, FURN: FURN, HOMES: HOMES, homeDialog: homeDialog, jobGate: jobGate, startExam: startExam, finishIntro: function (n, f, c, o, lv) { return finishIntro(n, f, c, o, lv); }, HALLS: HALLS, allocateHome: allocateHome, roomResidents: roomResidents, goCorridor: goCorridor, hallGate: hallGate, hallOf: hallOf, homeById: homeById, enterOwnRoom: enterOwnRoom, knockRoom: knockRoom, blockOf: blockOf, SLV: SLV, COURSES: COURSES, orientLeft: orientLeft, taskDialog: taskDialog, hallEligible: hallEligible, pending: function () { return PENDING; }, polMul: polMul, isExamWeek: isExamWeek, evActive: evActive, evNext: evNext, attendEvent: attendEvent, worthNow: worthNow, POLICIES: POLICIES, sessionsFor: sessionsFor, drawQs: drawQs, rollClassLocal: rollClassLocal, comfortScore: comfortScore, powered: powered, needsTick: needsTick, doSleep: doSleep, sellFurn: sellFurn, rentOf: rentOf, mySpot: mySpot, barred: barred, QB: QB, phone: function () { return { tab: phoneTab, open: panelOpen }; }, closePhone: closePhone, jobSpots: function () { return SPOTS.filter(function (s) { return s.type === 'job'; }); }, flushNet: function () { return NET.flush(); }, introOpen: function () { return introOpen; }, buyFurn: buyFurn, placeFurn: placeFurn, allowance: allowance, housekeeping: housekeeping, openPhone: openPhone, flexCanvas: function () { return flexCanvas(); }, ACH: ACH, player: player, spots: SPOTS, col: COL, tryInteract: interact, chunks: chunkList,
       LM: LM, state: function () { return { cash: G.cash, energy: G.energy }; }, G: G, W: W, DL: DL, TALK: TALK, QD: QD, npcs: npcs, labels: labels,
       setYaw: function (v) { yaw = v; }, setCam: function (v) { camDist = v; }, setCity: function (v) { cityDist = v; }, veh: VEH, scene: scene, renderer: renderer, camera: camera, inBuilding: inBuilding,
       close: closeDlg, enter: enterVehicle, exit: exitVehicle, drv: function () { return drv; }, pick: pickChoice, openDlg: openDlg, advance: advanceDlg, setWeather: setWeather, nextSession: nextSession, startLecture: startLecture,

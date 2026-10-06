@@ -47,3 +47,20 @@ For real sounds, record short mp3 files and put them in the same folder as the h
     <script>window.IFE_SOUNDS = { werey: ['werey1.mp3','werey2.mp3'], sabo: 'sabo.mp3', keke: 'keke.mp3', market: 'market.mp3', goal: 'goal.mp3', church: 'church.mp3', evangelist: 'evangelist.mp3', passerby: 'passerby.mp3' };</script>
 
 Any key you leave out falls back to the built-in voice.
+
+## People, money transfers, trades and house visits (new)
+1. Run the whole `supabase_schema.sql` again in the SQL Editor. It is safe to run again.
+2. Authentication > URL Configuration: set **Site URL** to your Netlify address (for example https://your-site.netlify.app). If you skip this, the confirmation email links to the wrong place.
+3. Authentication > Providers > Email: keep **Confirm email** switched ON. The money rules trust a confirmed email. With it off, anyone can fake one.
+4. Supabase's built-in email sender is limited to a few emails per hour. For real players, add a custom SMTP sender (Authentication > SMTP Settings). Resend and Brevo both have free plans.
+
+How it works:
+- Only players with a confirmed email can send money, receive money or trade. Guests can still chat, see everyone, and visit rooms.
+- Daily send limit is 5,000,000 per player, counted over a rolling 24 hours. Trades count toward it for the buyer.
+- Every transfer is checked and moved by the server in one step. The game cannot print money this way.
+- Items are held in the offer until the buyer pays or the offer ends. Declined, cancelled and expired offers (24 hours) give the item back.
+- Visiting: the visitor knocks, the owner gets a prompt, and if they accept the visitor sees the owner's room with the owner's furniture. Both appear to each other and can talk with speech bubbles.
+
+Known limits:
+- Item ownership is stored in the player's browser, not on the server. A cheater can invent an item and sell it. They cannot create cash this way, because the buyer pays real cash. Watch for odd prices.
+- Someone with many email accounts can still move money between their own accounts. The limit only slows it.

@@ -361,3 +361,225 @@ grant execute on function create_profile(text, boolean), apply_ledger(jsonb), sy
   to authenticated;
 grant execute on function set_level(int), presence_tick(real, real, real, text, text, int, text), claim_room(text, text, int, int, int), release_room(), room_occupants(text, text, int) to authenticated;
 grant select on profiles, messages, blocks to authenticated;
+
+-- =====================================================================================
+-- MONEY TRANSFERS, ITEM TRADES, HOUSE VISITS, ONLINE LIST  (run the whole file again; it is safe)
+-- Only players with a CONFIRMED EMAIL can send or receive money and trade. Daily send limit: 5,000,000 (rolling 24 hours).
+-- =====================================================================================
+create or replace function is_email_user(u uuid) returns boolean
+language sql stable security definer set search_path = public, auth as $$
+  select exists (select 1 from auth.users x where x.id = u and x.email is not null and x.email_confirmed_at is not null)
+$$;
+
+create table if not exists transfers (
+  id bigserial primary key, from_id uuid not null, to_id uuid not null, from_name text not null, to_name text not null,
+  amount bigint not null check (amount > 0), kind text not null default 'send', note text not null default '',
+  at timestamptz not null default now(), seen boolean not null default false
+);
+create index if not exists transfers_from_at on transfers (from_id, at);
+create index if not exists transfers_to_seen on transfers (to_id, seen);
+create table if not exists offers (
+  id bigserial primary key, from_id uuid not null, to_id uuid not null, from_name text not null, to_name text not null,
+  item text not null, qty int not null, price bigint not null, status text not null default 'open',
+  delivered boolean not null default false, returned boolean not null default false, at timestamptz not null default now()
+);
+create index if not exists offers_to on offers (to_id, status);
+create index if not exists offers_from on offers (from_id, status);
+create table if not exists visits (
+  id bigserial primary key, from_id uuid not null, to_id uuid not null, from_name text not null, to_name text not null,
+  status text not null default 'pending', at timestamptz not null default now()
+);
+create index if not exists visits_to on visits (to_id, status, at);
+create index if not exists visits_from on visits (from_id, at);
+alter table transfers enable row level security;
+alter table offers enable row level security;
+alter table visits enable row level security;
+
+create or replace function clean_note(t text) returns text language sql immutable as $$
+  select case when t ~* '(https?://|www\.|[a-z0-9-]+\.(com|net|org|ng|io|me|co|xyz|link)\b)' or t ~* '\m(fuck|bitch|nigga|rape|whore|slut|cunt|pussy)\M' then '' else t end
+$$;
+
+create or replace function send_money(p_to text, p_amount bigint, p_note text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); a profiles%rowtype; b profiles%rowtype; amt bigint := p_amount; used bigint; nt text := clean_note(left(btrim(coalesce(p_note, '')), 40)); n int;
+        lim constant bigint := 5000000;
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  if not is_email_user(me) then return jsonb_build_object('ok', false, 'error', 'Only accounts with a confirmed email can send money. Save your account with an email first (Account tab) and confirm it.'); end if;
+  select * into b from profiles where lower(username) = lower(btrim(coalesce(p_to, '')));
+  if not found then return jsonb_build_object('ok', false, 'error', 'No player with that username.'); end if;
+  if b.id = me then return jsonb_build_object('ok', false, 'error', 'You cannot send money to yourself.'); end if;
+  if not is_email_user(b.id) then return jsonb_build_object('ok', false, 'error', 'That player has no confirmed email yet, so they cannot receive money.'); end if;
+  if amt is null or amt < 1 or amt > lim then return jsonb_build_object('ok', false, 'error', 'Amount must be from 1 to 5,000,000.'); end if;
+  if exists (select 1 from blocks where (blocker = b.id and blocked = me) or (blocker = me and blocked = b.id)) then
+    return jsonb_build_object('ok', false, 'error', 'You cannot send money to this player.'); end if;
+  select count(*) into n from transfers where from_id = me and at > now() - interval '1 hour';
+  if n >= 30 then return jsonb_build_object('ok', false, 'error', 'Too many transfers this hour. Try later.'); end if;
+  perform 1 from profiles where id in (me, b.id) order by id for update;
+  select * into a from profiles where id = me;
+  select coalesce(sum(amount), 0) into used from transfers where from_id = me and kind in ('send', 'trade') and at > now() - interval '24 hours';
+  if used + amt > lim then return jsonb_build_object('ok', false, 'error', 'Daily limit is 5,000,000. You can still send ' || greatest(0, lim - used) || ' today.'); end if;
+  if a.cash < amt then return jsonb_build_object('ok', false, 'error', 'You do not have that much cash.'); end if;
+  update profiles set cash = cash - amt where id = me; update profiles set cash = cash + amt where id = b.id;
+  insert into transfers (from_id, to_id, from_name, to_name, amount, kind, note) values (me, b.id, a.username, b.username, amt, 'send', nt);
+  return jsonb_build_object('ok', true, 'cash', a.cash - amt, 'left', lim - used - amt, 'to', b.username);
+end $$;
+
+-- ---------- item offers: the seller's game removes the item first (held in escrow by the offer), the buyer pays on accept ----------
+create or replace function make_offer(p_to text, p_item text, p_qty int, p_price bigint) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); a profiles%rowtype; b profiles%rowtype; n int; oid bigint;
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  if not is_email_user(me) then return jsonb_build_object('ok', false, 'error', 'Only accounts with a confirmed email can trade.'); end if;
+  select * into a from profiles where id = me; select * into b from profiles where lower(username) = lower(btrim(coalesce(p_to, '')));
+  if not found then return jsonb_build_object('ok', false, 'error', 'No player with that username.'); end if;
+  if b.id = me then return jsonb_build_object('ok', false, 'error', 'You cannot trade with yourself.'); end if;
+  if not is_email_user(b.id) then return jsonb_build_object('ok', false, 'error', 'That player has no confirmed email, so they cannot trade.'); end if;
+  if p_item is null or p_item !~ '^[a-z_]{2,24}$' or p_qty is null or p_qty < 1 or p_qty > 20 or p_price is null or p_price < 0 or p_price > 5000000 then
+    return jsonb_build_object('ok', false, 'error', 'Bad offer.'); end if;
+  if exists (select 1 from blocks where (blocker = b.id and blocked = me) or (blocker = me and blocked = b.id)) then
+    return jsonb_build_object('ok', false, 'error', 'You cannot trade with this player.'); end if;
+  update offers set status = 'expired' where status = 'open' and at < now() - interval '24 hours';
+  select count(*) into n from offers where from_id = me and status = 'open';
+  if n >= 10 then return jsonb_build_object('ok', false, 'error', 'You already have 10 open offers.'); end if;
+  insert into offers (from_id, to_id, from_name, to_name, item, qty, price) values (me, b.id, a.username, b.username, p_item, p_qty, p_price) returning id into oid;
+  return jsonb_build_object('ok', true, 'id', oid);
+end $$;
+
+create or replace function answer_offer(p_id bigint, p_accept boolean) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); o offers%rowtype; a profiles%rowtype; used bigint; lim constant bigint := 5000000;
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  select * into o from offers where id = p_id for update;
+  if not found or o.to_id <> me then return jsonb_build_object('ok', false, 'error', 'Offer not found.'); end if;
+  if o.status = 'open' and o.at < now() - interval '24 hours' then update offers set status = 'expired' where id = o.id; return jsonb_build_object('ok', false, 'error', 'That offer expired.'); end if;
+  if o.status <> 'open' then return jsonb_build_object('ok', false, 'error', 'That offer is no longer open.'); end if;
+  if not p_accept then update offers set status = 'declined' where id = o.id; return jsonb_build_object('ok', true, 'declined', true); end if;
+  if not is_email_user(me) then return jsonb_build_object('ok', false, 'error', 'Only accounts with a confirmed email can trade.'); end if;
+  perform 1 from profiles where id in (me, o.from_id) order by id for update;
+  select * into a from profiles where id = me;
+  select coalesce(sum(amount), 0) into used from transfers where from_id = me and kind in ('send', 'trade') and at > now() - interval '24 hours';
+  if used + o.price > lim then return jsonb_build_object('ok', false, 'error', 'This would pass your daily limit of 5,000,000.'); end if;
+  if a.cash < o.price then return jsonb_build_object('ok', false, 'error', 'You do not have enough cash.'); end if;
+  if o.price > 0 then
+    update profiles set cash = cash - o.price where id = me; update profiles set cash = cash + o.price where id = o.from_id;
+    insert into transfers (from_id, to_id, from_name, to_name, amount, kind, note) values (me, o.from_id, a.username, o.from_name, o.price, 'trade', left(o.qty || ' x ' || o.item, 40));
+  end if;
+  update offers set status = 'accepted' where id = o.id;
+  return jsonb_build_object('ok', true, 'cash', a.cash - o.price, 'id', o.id);
+end $$;
+
+create or replace function cancel_offer(p_id bigint) returns jsonb
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  update offers set status = 'cancelled' where id = p_id and from_id = auth.uid() and status = 'open';
+  return jsonb_build_object('ok', found);
+end $$;
+
+-- the buyer collects a paid item, or the seller collects the item back from a declined, cancelled or expired offer. Once only.
+create or replace function claim_offer(p_id bigint) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); o offers%rowtype;
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  select * into o from offers where id = p_id for update; if not found then return jsonb_build_object('ok', false); end if;
+  if o.status = 'open' and o.at < now() - interval '24 hours' then update offers set status = 'expired' where id = o.id; o.status := 'expired'; end if;
+  if o.to_id = me and o.status = 'accepted' and not o.delivered then
+    update offers set delivered = true where id = o.id; return jsonb_build_object('ok', true, 'item', o.item, 'qty', o.qty, 'who', o.from_name, 'back', false);
+  elsif o.from_id = me and o.status in ('declined', 'cancelled', 'expired') and not o.returned then
+    update offers set returned = true where id = o.id; return jsonb_build_object('ok', true, 'item', o.item, 'qty', o.qty, 'who', o.to_name, 'back', true);
+  end if;
+  return jsonb_build_object('ok', false);
+end $$;
+
+-- ---------- house visits ----------
+create or replace function request_visit(p_to text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); a profiles%rowtype; b profiles%rowtype; n int; vid bigint;
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  select * into a from profiles where id = me; select * into b from profiles where lower(username) = lower(btrim(coalesce(p_to, '')));
+  if not found then return jsonb_build_object('ok', false, 'error', 'No player with that username.'); end if;
+  if b.id = me then return jsonb_build_object('ok', false, 'error', 'That is your own room.'); end if;
+  if exists (select 1 from blocks where (blocker = b.id and blocked = me) or (blocker = me and blocked = b.id)) then
+    return jsonb_build_object('ok', false, 'error', 'You cannot visit this player.'); end if;
+  if not exists (select 1 from presence where id = b.id and updated_at > now() - interval '30 seconds') then
+    return jsonb_build_object('ok', false, 'error', b.username || ' is not online right now.'); end if;
+  select count(*) into n from visits where from_id = me and at > now() - interval '1 hour';
+  if n >= 12 then return jsonb_build_object('ok', false, 'error', 'Too many knocks this hour.'); end if;
+  if exists (select 1 from visits where from_id = me and to_id = b.id and status = 'pending' and at > now() - interval '2 minutes') then
+    return jsonb_build_object('ok', false, 'error', 'You already knocked. Wait for an answer.'); end if;
+  insert into visits (from_id, to_id, from_name, to_name) values (me, b.id, a.username, b.username) returning id into vid;
+  return jsonb_build_object('ok', true, 'id', vid);
+end $$;
+
+create or replace function answer_visit(p_id bigint, p_accept boolean) returns jsonb
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  update visits set status = case when p_accept then 'accepted' else 'declined' end
+    where id = p_id and to_id = auth.uid() and status = 'pending' and at > now() - interval '3 minutes';
+  return jsonb_build_object('ok', found);
+end $$;
+
+-- the host's room, only for a visitor whose knock was accepted in the last hour
+create or replace function peek_room(p_name text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); b profiles%rowtype;
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  select * into b from profiles where lower(username) = lower(btrim(coalesce(p_name, ''))); if not found then return jsonb_build_object('ok', false); end if;
+  if not exists (select 1 from visits where from_id = me and to_id = b.id and status = 'accepted' and at > now() - interval '60 minutes') then
+    return jsonb_build_object('ok', false, 'error', 'No invitation.'); end if;
+  if b.save is null then return jsonb_build_object('ok', false, 'error', 'Their room is not ready yet.'); end if;
+  return jsonb_build_object('ok', true, 'name', b.username, 'level', b.level, 'home', b.save->'home', 'placed', coalesce(b.save->'placed', '[]'::jsonb), 'inv', coalesce(b.save->'inv', '{}'::jsonb));
+end $$;
+
+-- ---------- who is online (everyone sees everyone's username) ----------
+create or replace function online_players() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object('u', q.username, 'lv', q.level, 'x', q.x, 'z', q.z, 'in', q.room is not null, 'em', is_email_user(q.id)))
+    from (select * from presence p where p.id <> me and p.updated_at > now() - interval '30 seconds'
+      and not exists (select 1 from blocks b where (b.blocker = p.id and b.blocked = me) or (b.blocker = me and b.blocked = p.id))
+      order by p.username limit 150) q), '[]'::jsonb);
+end $$;
+
+-- ---------- one cheap call the game makes every few seconds ----------
+create or replace function social_poll() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid(); cash_now bigint; tin jsonb; oin jsonb; oret jsonb; vin jsonb; vout jsonb; used bigint;
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  select cash into cash_now from profiles where id = me; if not found then return jsonb_build_object('ok', false); end if;
+  with s as (update transfers set seen = true where to_id = me and not seen returning from_name, amount, kind, note)
+    select coalesce(jsonb_agg(jsonb_build_object('from', from_name, 'amt', amount, 'kind', kind, 'note', note)), '[]'::jsonb) into tin from s;
+  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'from', from_name, 'item', item, 'qty', qty, 'price', price, 'at', extract(epoch from at))), '[]'::jsonb) into oin
+    from offers where to_id = me and status = 'open' and at > now() - interval '24 hours';
+  select coalesce(jsonb_agg(id), '[]'::jsonb) into oret from offers
+    where (to_id = me and status = 'accepted' and not delivered) or (from_id = me and status in ('declined', 'cancelled', 'expired') and not returned);
+  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'from', from_name)), '[]'::jsonb) into vin from visits where to_id = me and status = 'pending' and at > now() - interval '3 minutes';
+  select jsonb_build_object('id', id, 'to', to_name, 'status', case when status = 'pending' and at < now() - interval '3 minutes' then 'expired' else status end) into vout
+    from visits where from_id = me and at > now() - interval '5 minutes' order by id desc limit 1;
+  select coalesce(sum(amount), 0) into used from transfers where from_id = me and kind in ('send', 'trade') and at > now() - interval '24 hours';
+  return jsonb_build_object('ok', true, 'cash', cash_now, 'em', is_email_user(me), 'left', greatest(0, 5000000 - used), 'tin', tin, 'oin', oin, 'oret', oret, 'vin', vin, 'vout', vout);
+end $$;
+
+create or replace function transfer_log() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare me uuid := auth.uid();
+begin
+  if me is null then raise exception 'not signed in'; end if;
+  return coalesce((select jsonb_agg(jsonb_build_object('out', t.from_id = me, 'who', case when t.from_id = me then t.to_name else t.from_name end, 'amt', t.amount, 'kind', t.kind, 'note', t.note, 'at', extract(epoch from t.at)) order by t.id desc)
+    from (select * from transfers where from_id = me or to_id = me order by id desc limit 15) t), '[]'::jsonb);
+end $$;
+
+revoke all on all tables in schema public from anon, authenticated;
+grant select on profiles, messages, blocks to authenticated;
+grant execute on function send_money(text, bigint, text), make_offer(text, text, int, bigint), answer_offer(bigint, boolean), cancel_offer(bigint), claim_offer(bigint),
+  request_visit(text), answer_visit(bigint, boolean), peek_room(text), online_players(), social_poll(), transfer_log() to authenticated;
