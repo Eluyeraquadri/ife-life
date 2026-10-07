@@ -1279,15 +1279,19 @@
         var m = MOVERS[i], v = m.v;
         var tx = m.path[m.i][0], tz = m.path[m.i][1];
         var dx = tx - m.cx, dz = tz - m.cz, d = Math.sqrt(dx * dx + dz * dz);
+        if (m.hold && m.holdT !== undefined) { m.holdT -= dt; if (m.holdT <= 0) { m.hold = false; m.holdT = undefined; } }
         if (d < 1.2) {
+          if (m.onEnd && m.i >= m.path.length - 1) { var cbE = m.onEnd; m.onEnd = null; cbE(m); }
+          else {
           if (m.i + m.dir < 0 || m.i + m.dir >= m.path.length) m.dir = -m.dir;
-          m.i += m.dir;
+          m.i += m.dir; }
         } else {
           var k = Math.min(1, dt * 3);
           m.hx += (dx / d - m.hx) * k; m.hz += (dz / d - m.hz) * k;
           var hl = Math.sqrt(m.hx * m.hx + m.hz * m.hz) || 1; m.hx /= hl; m.hz /= hl;
           var f = 1, rx = player.x - v.x, rz = player.z - v.z, ahead = rx * m.hx + rz * m.hz, lat = Math.abs(rx * m.hz - rz * m.hx);
           if (ahead > 0 && ahead < 18 && lat < 3.2) f = Math.max(0, (ahead - 4) / 14);
+          if (m.hold) f = 0;
           m.cx += m.hx * m.speed * f * dt; m.cz += m.hz * m.speed * f * dt;
           m.offCur += (m.off - m.offCur) * Math.min(1, dt * 2);
         }
@@ -6030,7 +6034,7 @@
         if (d < 4.5) offer(d - 3, { kind: 'talk', t: t, d: d, txt: 'Talk to ' + t.name });
       }
       for (i = 0; i < VEH.length; i++) {
-        var v = VEH[i]; if (!ENTERABLE[v.kind] || v.moving) continue;
+        var v = VEH[i]; if (!ENTERABLE[v.kind] || v.moving || v.pub) continue;
         d = Math.hypot(v.x - player.x, v.z - player.z);
         if (d < VSPEC[v.kind].enter) offer(d - 1, { kind: 'veh', v: v, d: d, txt: v.kind === 'okada' ? 'Ride the keke' : 'Drive the ' + vname(v.kind) });
       }
@@ -7089,6 +7093,394 @@
     applyLevel();
     window.IFE_CURRIC = { CUR: CUR, FCOM: FCOM, QBN: QBN, BANKOF: BANKOF, courses: curCourses };
 
+    // ============================================================
+    // PUBLIC TRANSPORT: kekes, minibuses and the campus shuttle have their own drivers.
+    // You hail or board them as a passenger, pick a stop, pay the fare and get dropped off.
+    // Sedans, your own keke and the Keke Park job kekes stay drivable.
+    // ============================================================
+    var PAXR = null;
+    (function () {
+      var PUBK = { okada: 1, danfo: 1, bus: 1 };
+      var SKIN = [0x8a5a3c, 0x6b4226, 0x3f2a1d, 0xb07a52, 0x5a3825, 0x7a4a2e];
+      var SHIRT = [0x2f6fb5, 0xb5472f, 0x3b8f5a, 0xd9c24a, 0x7a3fa0, 0xe8e8e6, 0x222428, 0xc4577a];
+      var headGeo = new THREE.SphereGeometry(0.17, 8, 6), bodyGeo = new THREE.BoxGeometry(0.5, 0.34, 0.26);
+      var matCache = {};
+      function lam(c) { return matCache[c] || (matCache[c] = new THREE.MeshLambertMaterial({ color: LC(c) })); }
+      function rpick(a) { return a[(Math.random() * a.length) | 0]; }
+      function bust(x, y, z) {
+        var g = new THREE.Group(), b = new THREE.Mesh(bodyGeo, lam(rpick(SHIRT))), h = new THREE.Mesh(headGeo, lam(rpick(SKIN)));
+        h.position.y = 0.33; g.add(b); g.add(h); g.position.set(x, y, z); return g;
+      }
+      var CFG = {
+        okada: { speed: 9, tag: 'keke' },
+        danfo: { speed: 10.5, tag: 'minibus' },
+        bus: { speed: 8.5, tag: 'campus shuttle' }
+      };
+      function pubName(v) { return v.kind === 'okada' ? 'keke' : (v.kind === 'danfo' ? 'minibus' : 'campus shuttle'); }
+
+      // ---- mark which vehicles are public ----
+      var op = D.spots.okada;
+      VEH.forEach(function (v) {
+        if (!PUBK[v.kind] || v.own) return;
+        if (v.kind === 'okada' && !v.moving && Math.hypot(v.x - op[0], v.z - op[1]) < 16) { v.park = true; return; }
+        v.pub = true;
+      });
+      function livePub(v) { return v.pub && !v.own && PUBK[v.kind]; }
+      // vehicles created after start (none today) would be picked up by this sweep
+      var sweepT = 0;
+
+      // ---- occupants: a driver and a few passengers, built only when you are near ----
+      function seatHuman(h, x, y, z) { h.position.set(x, y, z); h.rotation.y = 0; sitPose(h); }
+      function fill(v) {
+        if (v.occ) return; v.occ = [];
+        var g = v.g, k = v.kind, i, n;
+        if (k === 'okada') {
+          var d = makeHuman(randomLook()); seatHuman(d, 0, -0.12, 0.2); g.add(d); v.occ.push(d);
+          n = Math.random() < 0.5 ? 0 : (1 + ((Math.random() * 2) | 0));
+          for (i = 0; i < n; i++) { var p = makeHuman(randomLook()); seatHuman(p, i ? 0.32 : -0.28, -0.12, -0.85); g.add(p); v.occ.push(p); }
+        } else if (k === 'danfo') {
+          var b1 = bust(0.86, 1.28, 1.2); g.add(b1); v.occ.push(b1);
+          n = 1 + ((Math.random() * 4) | 0);
+          for (i = 0; i < n; i++) { var b2 = bust(i % 2 ? -0.86 : 0.86, 1.28, 0.2 - Math.floor(i / 2) * 1.25 - (i % 2 ? 0.3 : 0)); g.add(b2); v.occ.push(b2); }
+        } else {
+          var b3 = bust(1.12, 1.62, 3.3); g.add(b3); v.occ.push(b3);
+          n = 2 + ((Math.random() * 5) | 0);
+          for (i = 0; i < n; i++) { var b4 = bust(i % 2 ? -1.12 : 1.12, 1.62, 2.0 - Math.floor(i / 2) * 1.3); g.add(b4); v.occ.push(b4); }
+        }
+        v.occ = v.occ.filter(Boolean);
+      }
+      function unfill(v) { if (!v.occ) return; v.occ.forEach(function (o) { if (o.parent) o.parent.remove(o); }); v.occ = null; }
+      function occupantsTick() {
+        for (var i = 0; i < VEH.length; i++) {
+          var v = VEH[i]; if (!livePub(v)) continue;
+          var d = Math.abs(v.x - player.x) + Math.abs(v.z - player.z);
+          if (!v.occ && d < 85) fill(v); else if (v.occ && d > 130 && !(PAXR && PAXR.v === v)) unfill(v);
+        }
+      }
+
+      // ---- road graph for routing ----
+      var TG = null;
+      function tgBuild() {
+        if (TG) return TG;
+        var nodes = [], adj = [], H = {}, CELL = 3.5;
+        function nid(x, z) {
+          var kx = Math.floor(x / CELL), kz = Math.floor(z / CELL), a, b, l, i;
+          for (a = -1; a <= 1; a++) for (b = -1; b <= 1; b++) {
+            l = H[(kx + a) + ',' + (kz + b)]; if (!l) continue;
+            for (i = 0; i < l.length; i++) if (Math.hypot(nodes[l[i]][0] - x, nodes[l[i]][1] - z) < CELL) return l[i];
+          }
+          nodes.push([x, z]); adj.push([]); var id = nodes.length - 1, key = kx + ',' + kz; (H[key] = H[key] || []).push(id); return id;
+        }
+        D.roads.forEach(function (r) {
+          if (r[0] > 5) return;
+          var np = (r.length - 1) / 2, prev = -1, i;
+          for (i = 0; i < np; i++) {
+            var id = nid(r[1 + 2 * i] / 10, r[2 + 2 * i] / 10);
+            if (prev >= 0 && prev !== id) {
+              var w = Math.hypot(nodes[id][0] - nodes[prev][0], nodes[id][1] - nodes[prev][1]);
+              adj[prev].push([id, w]); adj[id].push([prev, w]);
+            }
+            prev = id;
+          }
+        });
+        var comp = new Array(nodes.length), c = 0, s, q, j;
+        for (s = 0; s < nodes.length; s++) {
+          if (comp[s] !== undefined) continue; comp[s] = c; q = [s];
+          while (q.length) { var u = q.pop(); for (j = 0; j < adj[u].length; j++) { var t = adj[u][j][0]; if (comp[t] === undefined) { comp[t] = c; q.push(t); } } }
+          c++;
+        }
+        var sizes = {}; comp.forEach(function (x) { sizes[x] = (sizes[x] || 0) + 1; });
+        var big = 0; Object.keys(sizes).forEach(function (k) { if (sizes[k] > (sizes[big] || 0)) big = +k; });
+        TG = { nodes: nodes, adj: adj, comp: comp, big: big };
+        return TG;
+      }
+      function nearNode(x, z, onlyBig) {
+        var g = tgBuild(), best = -1, bd = 1e12, i;
+        for (i = 0; i < g.nodes.length; i++) {
+          if (onlyBig && g.comp[i] !== g.big) continue;
+          var dx = g.nodes[i][0] - x, dz = g.nodes[i][1] - z, d = dx * dx + dz * dz;
+          if (d < bd) { bd = d; best = i; }
+        }
+        return best < 0 ? null : { id: best, d: Math.sqrt(bd) };
+      }
+      function route(a, b) {                                   // A* over road nodes, returns list of [x,z]
+        var g = tgBuild(), N = g.nodes, gs = {}, fs = {}, from = {}, open = [a], closed = {}, hh = function (i) { return Math.hypot(N[i][0] - N[b][0], N[i][1] - N[b][1]); };
+        gs[a] = 0; fs[a] = hh(a);
+        var guard = 0;
+        while (open.length && guard++ < 60000) {
+          var bi = 0, k;
+          for (k = 1; k < open.length; k++) if (fs[open[k]] < fs[open[bi]]) bi = k;
+          var cur = open.splice(bi, 1)[0];
+          if (cur === b) { var out = [], n = b; while (n !== undefined) { out.push(N[n]); n = from[n]; } return out.reverse(); }
+          closed[cur] = 1;
+          var e = g.adj[cur];
+          for (k = 0; k < e.length; k++) {
+            var nb = e[k][0]; if (closed[nb]) continue;
+            var tg = gs[cur] + e[k][1];
+            if (gs[nb] === undefined || tg < gs[nb]) { gs[nb] = tg; fs[nb] = tg + hh(nb); from[nb] = cur; if (open.indexOf(nb) < 0) open.push(nb); }
+          }
+        }
+        return null;
+      }
+      function plen(p) { var s = 0, i; for (i = 1; i < p.length; i++) s += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]); return s; }
+
+      // ---- movers ----
+      function moverOf(v) { for (var i = 0; i < MOVERS.length; i++) if (MOVERS[i].v === v) return MOVERS[i]; return null; }
+      function takeOver(v, path, speed, onEnd) {
+        var m = moverOf(v);
+        if (!m) {
+          m = { v: v, path: path, i: 0, dir: 1, cx: v.x, cz: v.z, hx: Math.sin(v.rot), hz: Math.cos(v.rot), speed: speed, off: 1.6, offCur: 0 };
+          m.home = { x: v.x, z: v.z, rot: v.rot }; MOVERS.push(m);
+        } else if (!m.keep) {
+          m.keep = { path: m.path, i: m.i, dir: m.dir, speed: m.speed, off: m.off };
+        }
+        m.path = path; m.i = 0; m.dir = 1; m.speed = speed; m.off = Math.min(m.off || 1.6, 1.8); m.hold = false; m.onEnd = onEnd;
+        v.moving = true;
+        return m;
+      }
+      function release(v) {                                    // vehicle goes back to what it was doing
+        var m = moverOf(v); if (!m) return;
+        if (m.keep) {
+          var K = m.keep, bi = 0, bd = 1e12, i; m.keep = null;
+          for (i = 0; i < K.path.length; i++) { var d = Math.hypot(K.path[i][0] - m.cx, K.path[i][1] - m.cz); if (d < bd) { bd = d; bi = i; } }
+          m.path = K.path; m.i = bi; m.dir = K.dir; m.speed = K.speed; m.off = K.off; m.hold = false; m.onEnd = null;
+        } else {                                               // was parked: put it back
+          var h = m.home; MOVERS.splice(MOVERS.indexOf(m), 1);
+          if (h) { v.x = h.x; v.z = h.z; v.rot = h.rot; v.g.position.set(h.x, 0, h.z); v.g.rotation.y = h.rot; }
+          v.moving = false;
+        }
+        v.busy = false;
+      }
+      var QUEUE = [];
+      function later(sec, fn) { QUEUE.push({ t: sec, fn: fn }); }
+
+      // ---- fares and stops ----
+      function fareFor(v, dist) {
+        if (v.kind === 'bus') return 50;
+        if (v.kind === 'danfo') return Math.max(100, Math.round((80 + dist * 0.1) / 50) * 50);
+        return Math.max(200, Math.round((250 + dist * 0.4) / 50) * 50);
+      }
+      var STOPS = ['OAU Main Gate', 'Student Union Building', 'Faculty of Law', 'Hezekiah Oluwasanmi Library', 'Faculty of Technology', 'Awolowo Hall', 'Moremi Hall', 'Angola Hall', 'Mozambique Hall', 'Oduduwa Hall', 'OAU Health Centre', 'OAU Sports Centre', 'Faculty of Social Sciences', 'Faculty of Arts', 'Faculty of Pharmacy', 'Faculty of Education', 'Faculty of Administration', 'Amphi Theatre', '1000 Seater Lecture Theatre', 'Fajuyi Hall', 'Alumni Hall', 'Ogunbanjo Hall', 'Postgraduate College', 'ETF Hall', 'Museum of Natural History'];
+      function stopList(v) {
+        var g = tgBuild(), out = [];
+        STOPS.forEach(function (nm) {
+          var p = LM[nm]; if (!p) return;
+          var d = Math.hypot(p[0] - v.x, p[1] - v.z); if (d < 140) return;
+          var nn = nearNode(p[0], p[1], true); if (!nn) return;
+          out.push({ name: nm, x: p[0], z: p[1], node: nn.id, walk: nn.d, d: d });
+        });
+        out.sort(function (a, b) { return a.d - b.d; });
+        return out;
+      }
+
+      // ---- boarding ----
+      var hailed = null;
+      function nodeText(v) { return 'Driver: "Oga, where to?" The ' + pubName(v) + ' is ' + (v.kind === 'bus' ? 'free-ish: ₦50 flat.' : 'running. Fare depends on the distance.'); }
+      function openBoard(v, page) {
+        if (!livePub(v) || v.busy || PAXR || drv || DL.on || INT) return;
+        var st = stopList(v);
+        if (!st.length) { show('This ' + pubName(v) + ' has nowhere to go from here.', 2500); return; }
+        page = page || 0; hailed = v;
+        var m = moverOf(v); if (m) { m.hold = true; m.holdT = 35; }
+        var list = st.slice(page * 5, page * 5 + 5), ch = [];
+        list.forEach(function (s) {
+          var fare = fareFor(v, s.d * 1.3);
+          ch.push(C(s.name + ' (' + naira(fare) + ')', function () { return confirmBoard(v, s, fare); }));
+        });
+        if (st.length > (page + 1) * 5) ch.push(C('More stops...', function () { return boardNode(v, page + 1); }));
+        ch.push(C('Not now', function () { cancelHail(v); return null; }));
+        openDlg(cap(pubName(v)) + ' driver', Nd(nodeText(v), ch));
+      }
+      function boardNode(v, page) {                            // used for "More stops" paging inside the open dialog
+        var st = stopList(v), list = st.slice(page * 5, page * 5 + 5), ch = [];
+        list.forEach(function (s) { var fare = fareFor(v, s.d * 1.3); ch.push(C(s.name + ' (' + naira(fare) + ')', function () { return confirmBoard(v, s, fare); })); });
+        if (st.length > (page + 1) * 5) ch.push(C('More stops...', function () { return boardNode(v, page + 1); }));
+        if (page > 0) ch.push(C('Back', function () { return boardNode(v, page - 1); }));
+        ch.push(C('Not now', function () { cancelHail(v); return null; }));
+        return Nd('Pick your stop.', ch);
+      }
+      function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+      function cancelHail(v) { var m = moverOf(v); if (m && !PAXR) { m.hold = false; } hailed = null; }
+      function confirmBoard(v, s, fare) {
+        if (G.cash < fare) { cancelHail(v); return Nd('Driver: "Oga, you no get the ₦' + fare + '. Go and hustle first."', [C('Ok', null)]); }
+        var a = nearNode(v.x, v.z, true);
+        var path = a ? route(a.id, s.node) : null;
+        if (!path || path.length < 2) { cancelHail(v); return Nd('Driver: "That road is blocked. Pick another place."', [C('Ok', null)]); }
+        startRide(v, s, fare, path);
+        return null;
+      }
+      function startRide(v, s, fare, path) {
+        var sp = CFG[v.kind].speed;
+        v.busy = true; hailed = null;
+        PAXR = { v: v, dest: s, fare: fare, dist: plen(path), t: 0, done: false };
+        PAXR.m = takeOver(v, path, sp, function () { arrive(); });
+        PAXR.m.hold = false;
+        player.group.visible = false; AUD.door();
+        show('You are in the ' + pubName(v) + ' going to ' + s.name + '. Fare ' + naira(fare) + '. Press E for ride options.', 5000);
+      }
+      function dropPlayer() {
+        var v = PAXR.v, sn = Math.sin(v.rot), cs = Math.cos(v.rot), tries = [[1, 0], [-1, 0], [1, 1.8], [-1, 1.8], [1, -1.8], [-1, -1.8]], i, spot = null;
+        for (i = 0; i < tries.length && !spot; i++) {
+          var so = tries[i][0] * (v.rad + 1.3), bk = tries[i][1];
+          var px = v.x - cs * so + sn * bk, pz = v.z + sn * so + cs * bk;
+          if (isFree(px, pz, PLAYER_R + 0.2)) spot = [px, pz];
+        }
+        if (!spot) spot = findOpen(v.x, v.z, 2, 14, 0.8);
+        player.x = spot[0]; player.z = spot[1]; player.rot = v.rot;
+        player.group.visible = true; player.group.position.y = 0;
+        resolve(player);
+      }
+      function finish(msg, pay) {
+        var P = PAXR; if (!P) return;
+        var fare = pay ? Math.min(P.fare, Math.max(0, G.cash)) : 0;
+        if (fare > 0) { spend('fee', fare); AUD.coin(); }
+        dropPlayer(); AUD.door();
+        var v = P.v, m = P.m; PAXR = null;
+        show(msg + (fare ? ' -' + naira(fare) : ''), 4800);
+        // the driver waits a moment, then goes back to work
+        if (m) { m.hold = true; m.onEnd = null; }
+        later(2.5, function () { backToWork(v); });
+      }
+      function backToWork(v) {
+        var m = moverOf(v); if (!m) { v.busy = false; v.moving = false; return; }
+        var home = m.keep ? null : m.home;
+        if (home) {                                            // parked kekes and minibuses return to their spot
+          var a = nearNode(v.x, v.z, true), b = nearNode(home.x, home.z, true), p = (a && b) ? route(a.id, b.id) : null;
+          if (p && p.length >= 2) { p.push([home.x, home.z]); m.path = p; m.i = 0; m.dir = 1; m.hold = false; m.onEnd = function () { release(v); }; return; }
+        }
+        release(v);
+      }
+      function arrive() {
+        var P = PAXR; if (!P) return;
+        finish('You arrived at ' + P.dest.name + '. Driver: "Thank you, boss. Safe journey."', true);
+      }
+      function walkMsg() { return ''; }
+
+      // ---- the in-ride menu ----
+      function rideMenu() {
+        var P = PAXR; if (!P) return;
+        var left = P.m ? remaining(P) : 0, mins = Math.max(1, Math.round(left / 12));
+        openDlg(cap(pubName(P.v)) + ' driver', Nd('Heading to ' + P.dest.name + '. About ' + Math.round(left) + ' m to go. Fare ' + naira(P.fare) + '.', [
+          C('Skip ahead (arrive now, ~' + mins + ' min pass)', function () { skipRide(mins); return null; }),
+          C('Stop here, I will get off (pay full fare)', function () { finish('You got off. Driver: "Oya, no wahala."', true); return null; }),
+          C('Keep riding', null)
+        ]));
+      }
+      function remaining(P) {
+        var m = P.m, s = 0, i; if (!m || !m.path) return 0;
+        s += Math.hypot(m.path[m.i][0] - m.cx, m.path[m.i][1] - m.cz);
+        for (i = m.i + 1; i < m.path.length; i++) s += Math.hypot(m.path[i][0] - m.path[i - 1][0], m.path[i][1] - m.path[i - 1][1]);
+        return s;
+      }
+      function skipRide(mins) {
+        var P = PAXR; if (!P) return;
+        var m = P.m, last = m.path[m.path.length - 1], pv = m.path[Math.max(0, m.path.length - 2)];
+        m.cx = last[0]; m.cz = last[1]; m.hx = last[0] - pv[0]; m.hz = last[1] - pv[1];
+        var hl = Math.hypot(m.hx, m.hz) || 1; m.hx /= hl; m.hz /= hl; m.offCur = m.off;
+        m.i = m.path.length - 1; m.v.x = m.cx - m.hz * m.offCur; m.v.z = m.cz + m.hx * m.offCur; m.v.rot = Math.atan2(m.hx, m.hz);
+        m.v.g.position.set(m.v.x, 0, m.v.z); m.v.g.rotation.y = m.v.rot;
+        advanceTime(mins);
+        arrive();
+      }
+
+      // ---- highlight ring + tap to hail ----
+      var ring = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.25, 28), new THREE.MeshBasicMaterial({ color: LC(0xfbbf24), transparent: true, opacity: 0.85, side: THREE.DoubleSide, toneMapped: false, depthWrite: false }));
+      ring.rotation.x = -Math.PI / 2; ring.visible = false; scene.add(ring);
+      var focus = null, ringT = 0;
+      function nearestPub(maxD) {
+        var best = null, bd = maxD, i;
+        for (i = 0; i < VEH.length; i++) {
+          var v = VEH[i]; if (!livePub(v) || v.busy) continue;
+          var d = Math.hypot(v.x - player.x, v.z - player.z) - v.half;
+          if (d < bd) { bd = d; best = v; }
+        }
+        return best ? { v: best, d: bd } : null;
+      }
+      var BOARD_R = { okada: 5.2, danfo: 6, bus: 7.5 };
+      function canBoardNow() { return !PAXR && !drv && !INT && !DL.on && !panelOpen && !mg && !working && !lecture && !introOpen; }
+      function trTick(dt) {
+        var i;
+        sweepT -= dt; if (sweepT <= 0) { sweepT = 1.2; occupantsTick(); }
+        for (i = QUEUE.length - 1; i >= 0; i--) { QUEUE[i].t -= dt; if (QUEUE[i].t <= 0) { var q = QUEUE.splice(i, 1)[0]; try { q.fn(); } catch (e) { /* ignore */ } } }
+        // a hailed vehicle that nobody boarded goes on its way
+        if (hailed && !DL.on && !PAXR) { var mh = moverOf(hailed); if (mh) mh.hold = false; hailed = null; }
+        if (PAXR) {
+          var P = PAXR, v = P.v;
+          if (lecture || introOpen) { finish('You got off.', true); return; }
+          player.x = v.x; player.z = v.z; player.rot = v.rot; player.group.visible = false;
+          P.t += dt;
+          ring.visible = false; focus = null;
+          if (P.m && P.m.hold && !P.m.onEnd) P.m.hold = false;
+          return;
+        }
+        // highlight the nearest boardable public vehicle
+        if (canBoardNow()) {
+          var np = nearestPub(32);
+          focus = np ? np.v : null;
+        } else focus = null;
+        if (focus) {
+          ringT += dt; ring.visible = true;
+          var r = focus.half + 0.9, pulse = 1 + 0.08 * Math.sin(ringT * 5);
+          ring.position.set(focus.x, 0.12, focus.z); ring.scale.set(focus.rad * 1.5 * pulse, focus.half * 1.15 * pulse + 0.6, 1);
+          ring.rotation.z = focus.rot;
+          ring.material.opacity = Math.hypot(focus.x - player.x, focus.z - player.z) - focus.half < BOARD_R[focus.kind] + 2 ? 0.95 : 0.5;
+        } else ring.visible = false;
+      }
+      // ring is a flat ellipse: rotation order fix (x flat, then spin around world Y)
+      ring.rotation.order = 'YXZ';
+
+      // tap or click a vehicle to board it
+      (function () {
+        var down = null, tmp = new THREE.Vector3();
+        renderer.domElement.addEventListener('pointerdown', function (e) { down = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId }; });
+        renderer.domElement.addEventListener('pointerup', function (e) {
+          var d0 = down; down = null;
+          if (!d0 || d0.id !== e.pointerId) return;
+          if (Math.hypot(e.clientX - d0.x, e.clientY - d0.y) > 9 || performance.now() - d0.t > 450) return;
+          if (!canBoardNow()) return;
+          var rect = renderer.domElement.getBoundingClientRect ? renderer.domElement.getBoundingClientRect() : { left: 0, top: 0, width: innerWidth, height: innerHeight };
+          var best = null, bd = 70, i;
+          for (i = 0; i < VEH.length; i++) {
+            var v = VEH[i]; if (!livePub(v) || v.busy || !v.g.visible) continue;
+            if (Math.hypot(v.x - player.x, v.z - player.z) > 90) continue;
+            tmp.set(v.x, 1.1, v.z).project(camera); if (tmp.z > 1) continue;
+            var sx = rect.left + (tmp.x * 0.5 + 0.5) * rect.width, sy = rect.top + (-tmp.y * 0.5 + 0.5) * rect.height;
+            var dd = Math.hypot(sx - e.clientX, sy - e.clientY); if (dd < bd) { bd = dd; best = v; }
+          }
+          if (!best) return;
+          var dist = Math.hypot(best.x - player.x, best.z - player.z) - best.half;
+          if (dist > BOARD_R[best.kind] + (best.moving ? 6 : 0)) { show('Walk closer to the ' + pubName(best) + ' (' + Math.round(dist) + ' m away) and tap it again.', 2600); return; }
+          AUD.click(); openBoard(best);
+        });
+      })();
+
+      // ---- hook into the interaction system ----
+      var _fc2 = findCandidate;
+      findCandidate = function () {
+        if (PAXR) return { kind: 'pride', d: 0, txt: 'Ride options (' + pubName(PAXR.v) + ' to ' + PAXR.dest.name + ')' };
+        var base = _fc2();
+        if (drv || INT || lecture || introOpen || DL.on) return base;
+        var np = nearestPub(12); if (!np) return base;
+        var v = np.v, reach = BOARD_R[v.kind] + (v.moving ? 5 : 0);
+        if (np.d > reach) return base;
+        if (base && base.kind !== 'veh' && base.d !== undefined && base.d < np.d + 1) return base;
+        return { kind: 'pub', v: v, d: np.d, txt: (v.moving ? 'Wave down the ' : 'Board the ') + pubName(v) };
+      };
+      var _in2 = interact;
+      interact = function () {
+        if (!DL.on && !mg && !panelOpen && !INT && !working && !lecture && !introOpen) {
+          if (PAXR) { AUD.click(); rideMenu(); return; }
+          if (!drv && cand && cand.kind === 'pub') { AUD.click(); openBoard(cand.v); return; }
+        }
+        return _in2();
+      };
+      window.IFE_TRANSIT = {
+        pax: function () { return PAXR; }, graph: tgBuild, route: route, nearNode: nearNode, stops: stopList, openBoard: openBoard,
+        tick: trTick, fill: fill, isPub: livePub, startRide: startRide, fareFor: fareFor, moverOf: moverOf, skip: function () { skipRide(3); },
+        flush: function (sec) { var n = 0; while (QUEUE.length && n++ < 10) { QUEUE.forEach(function (q) { q.t = 0; }); trTick(0.01); } }
+      };
+    })();
+
     // =====================================================================================
     // HOME SCREEN: title page shown on every load (phone and desktop). Play / Continue,
     // account sign-in, leaders, how to play, settings. The game world turns slowly behind it.
@@ -7364,6 +7756,7 @@
       try { wearUpdate(); itemsTick(dt); } catch (e3) { if (!window.__wErr) { window.__wErr = 1; console.error('wear', e3 && e3.stack); } }
       try { partyTick(dt, now); } catch (e2) { if (!window.__ptErr) { window.__ptErr = 1; console.error('partyTick', e2 && e2.stack); } }
       try { voiceTick(dt, now); } catch (e4) { if (!window.__vErr) { window.__vErr = 1; console.error('voice', e4 && e4.stack); } }
+      try { if (window.IFE_TRANSIT) IFE_TRANSIT.tick(dt); } catch (e7) { if (!window.__trErr) { window.__trErr = 1; console.error('transit', e7 && e7.stack); } }
       try { rxTick(dt); } catch (e6) { if (!window.__rErr) { window.__rErr = 1; console.error('ride', e6 && e6.stack); } }
       try { tradeTick(dt); } catch (e5) { if (!window.__tErr) { window.__tErr = 1; console.error('trade', e5 && e5.stack); } }
       updateRainFx(dt); if (INT) rainMesh.visible = false;
@@ -7384,7 +7777,7 @@
         player.group.position.y = 0;
       } else if (drv && !paused) {
         updateDriving(dt);
-      } else if (!paused && !drv) {
+      } else if (!paused && !drv && !PAXR) {
         var ix = 0, iz = 0;
         if (keys.KeyW || keys.ArrowUp || touch.f) iz += 1;
         if (keys.KeyS || keys.ArrowDown || touch.b) iz -= 1;
@@ -7506,7 +7899,7 @@
         if (camStyle === 'fpv') { cx2 = player.x; cz2 = player.z; height = drv ? (drv.v.kind === 'okada' ? 1.55 : 1.45) : 1.62; ty = height - 0.1; ldx = -Math.sin(yaw) * 10; ldz = -Math.cos(yaw) * 10; }
         else if (camStyle === 'follow') { var ld2 = camLead * 4; ldx = fwx * ld2; ldz = fwz * ld2; }
       }
-      var wantHide = camStyle === 'fpv' && !INT; if (wantHide) { player.group.visible = false; fpvHid = true; } else if (fpvHid) { fpvHid = false; player.group.visible = !(drv && drv.v.kind !== 'okada'); }
+      var wantHide = camStyle === 'fpv' && !INT; if (wantHide) { player.group.visible = false; fpvHid = true; } else if (fpvHid) { fpvHid = false; player.group.visible = !(PAXR || (drv && drv.v.kind !== 'okada')); }
       if (Math.abs(camPos.x - cx2) + Math.abs(camPos.z - cz2) > 70) { camPos.x = cx2; camPos.y = height; camPos.z = cz2; }
       var k = 1 - Math.exp(-dt * (city ? 5 : 6));
       camPos.x += (cx2 - camPos.x) * k; camPos.y += (height - camPos.y) * k; camPos.z += (cz2 - camPos.z) * k;
@@ -7516,7 +7909,7 @@
       camera.lookAt(camTarget);
       var fovT = city ? (INT ? 42 : 38) : (camStyle === 'fpv' ? 74 : 60) + (drv ? 14 * Math.min(1, Math.abs(drv.speed) / sp2.max) : 0);
       if (Math.abs(camera.fov - fovT) > 0.1) { camera.fov += (fovT - camera.fov) * Math.min(1, dt * 4); camera.updateProjectionMatrix(); }
-      playerRing.visible = !drv && !introOpen; playerRing.position.set(player.x, 0.09, player.z); playerRing.scale.setScalar(city ? 1.5 : 1);
+      playerRing.visible = !drv && !PAXR && !introOpen; playerRing.position.set(player.x, 0.09, player.z); playerRing.scale.setScalar(city ? 1.5 : 1);
       if (!drv) player.group.scale.setScalar(city ? CITYK : 1);
       updatePins(city && !INT && !introOpen);
 
