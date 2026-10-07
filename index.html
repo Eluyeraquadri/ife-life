@@ -638,7 +638,7 @@
         pv(gt, xs[bb], h, zs[bb], 0, 1, 0, rc, xs[bb] / 4, zs[bb] / 4);
         pv(gt, xs[c2], h, zs[c2], 0, 1, 0, rc, xs[c2] / 4, zs[c2] / 4);
       }
-      addCollider(xs, zs, n);
+      addCollider(xs, zs, n); COL[COL.length - 1].bi = bi; COL[COL.length - 1].h = h;
     });
 
     // roads: asphalt (marked / plain) and dirt, each with a red-earth shoulder
@@ -6724,7 +6724,362 @@
       finishIntro = function () { _fi.apply(null, arguments); setTimeout(function () { if (!G.flags.fac) deptPicker(); }, 700); };
     })();
     deptApply();
-    window.IFE_DEPT = { FACULTIES: FACULTIES, pick: deptPicker, apply: deptApply, label: deptLabel };
+    window.IFE_DEPT = { FACULTIES: FACULTIES, pick: function () { return deptPicker.apply(null, arguments); }, apply: function () { return deptApply.apply(null, arguments); }, label: function () { return deptLabel(); } };
+
+    // =====================================================================================
+    // ENTER ANY BUILDING. Walk up to any building (all 5,000 of them) and press E to go in.
+    // Named buildings (faculties, halls, sports centre, chapel, market and the other amenities) get their own
+    // interior. Ordinary buildings get a generic house, shop or office block. Rooms are built once and reused.
+    // Amenities keep their old features: the counter or desk inside runs the same dialog as before.
+    // =====================================================================================
+    var BDG = { t: 0, c: null };
+    var GISTS = [
+      '"Did you hear? Lecturers are marking scripts in the dark. NEPA took light again."',
+      '"Abeg, which hall has water today? My bucket is crying."',
+      '"The jollof at the cafeteria is better on Wednesdays. Trust me."',
+      '"Our course rep said the test is Friday. He said it last Friday too."',
+      '"They say the SUG election is coming. Everybody is suddenly your friend."',
+      '"I slept in the library yesterday. The AC there is a blessing."',
+      '"Fresher, always carry your ID card. The porters do not play."',
+      '"My CGPA and I are not on speaking terms this semester."',
+      '"If you see keke for 100 naira before 8am, buy it. It will not last."',
+      '"Group assignment: five people on the list, one person working. Guess who."'
+    ];
+    function gistLine() { return GISTS[(Math.random() * GISTS.length) | 0]; }
+    function segDist(px, pz, ax, az, bx, bz) {
+      var dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz, t = l2 > 0 ? ((px - ax) * dx + (pz - az) * dz) / l2 : 0;
+      t = Math.max(0, Math.min(1, t)); return Math.hypot(px - (ax + dx * t), pz - (az + dz * t));
+    }
+    function nearBuilding() {                      // the closest building edge within a few metres of the player
+      var now = performance.now(); if (now - BDG.t < 120) return BDG.c; BDG.t = now; BDG.c = null;
+      var px = player.x, pz = player.z, cx0 = Math.floor(px / COLC), cz0 = Math.floor(pz / COLC), best = null, bd = 3.6, seen = {}, dx, dz, k, i;
+      for (dx = -1; dx <= 1; dx++) for (dz = -1; dz <= 1; dz++) {
+        var list = colGrid[(cx0 + dx) + ',' + (cz0 + dz)]; if (!list) continue;
+        for (k = 0; k < list.length; k++) {
+          var idx = list[k]; if (seen[idx]) continue; seen[idx] = 1;
+          var b = COL[idx]; if (b.bi === undefined) continue;
+          if (px < b.minX - bd || px > b.maxX + bd || pz < b.minZ - bd || pz > b.maxZ + bd) continue;
+          var md = 1e9;
+          for (i = 0; i < b.n; i++) { var j = (i + 1) % b.n, d = segDist(px, pz, b.x[i], b.z[i], b.x[j], b.z[j]); if (d < md) md = d; }
+          if (md < bd) { bd = md; best = b; }
+        }
+      }
+      BDG.c = best; return best;
+    }
+    var INSTIT = /^(Faculty|New Faculty|Museum|Student Union|University Senate|Oduduwa|Amphi|1000 Seater|Postgraduate College|OAU Health|OAU Sports|Hezekiah)|Hall$/;
+    var HOUSE_NAMES = ['Family house', 'Boys quarters', 'Student lodge', 'Duplex', 'Bungalow', 'Staff quarters'];
+    var SHOP_NAMES = ['Provisions store', 'Phone accessories shop', 'Tailor', 'Cold room', 'Cyber cafe', 'Photocopy centre', 'Barbing salon', 'Gadget shop'];
+    var HALL_NAMES = ['Office block', 'Lecture annex', 'Departmental building', 'Lab block', 'Staff offices', 'Workshop'];
+    function bInfo(b) {
+      if (b.info) return b.info;
+      var n = b.n, cx = 0, cz = 0, i, area = 0;
+      for (i = 0; i < n; i++) { cx += b.x[i]; cz += b.z[i]; } cx /= n; cz /= n;
+      for (i = 0; i < n; i++) { var j = (i + 1) % n; area += b.x[i] * b.z[j] - b.x[j] * b.z[i]; } area = Math.abs(area) / 2;
+      var inf = { cx: cx, cz: cz, area: area, name: null, tpl: 'house', title: '' }, hs = hash01(b.bi + 77), bestLM = null, bd = area >= 180 ? 62 : 30;
+      if (area > 110) for (var nm in LM) { if (!INSTIT.test(nm)) continue; var d = Math.hypot(LM[nm][0] - cx, LM[nm][1] - cz); if (d < bd) { bd = d; bestLM = nm; } }
+      if (bestLM) { inf.name = bestLM; inf.tpl = 'hall'; inf.title = bestLM; }
+      else if (area < 50) { inf.tpl = 'house'; inf.title = HOUSE_NAMES[(hs * HOUSE_NAMES.length) | 0]; }
+      else if (area < 170) { if (hs < 0.5) { inf.tpl = 'house'; inf.title = HOUSE_NAMES[(hash01(b.bi + 3) * HOUSE_NAMES.length) | 0]; } else { inf.tpl = 'shop'; inf.title = SHOP_NAMES[(hash01(b.bi + 5) * SHOP_NAMES.length) | 0]; } }
+      else { inf.tpl = 'hall'; inf.title = HALL_NAMES[(hs * HALL_NAMES.length) | 0]; }
+      b.info = inf; return inf;
+    }
+    // amenity spots that you can walk into: spot id -> [template, decoration]
+    var ENTV = {
+      v_market: ['market', 'market'], v_chapel: ['worship', 'church'], v_mosque: ['worship', 'mosque'], v_sports: ['sports', 'court'],
+      'am_Swimming Pool': ['sports', 'pool'], am_Gym: ['sports', 'gym'], 'am_Bank & ATMs': ['shop', 'bank'], 'am_Post Office': ['shop', 'post'],
+      'am_University Bookshop': ['shop', 'books'], 'am_Cafeteria (Moremi side)': ['shop', 'cafe'], 'am_Cafeteria (Faculty side)': ['shop', 'cafe'],
+      am_Pharmacy: ['shop', 'pharm'], 'am_Barber & Salon': ['shop', 'salon'], am_Laundry: ['shop', 'laundry'], 'am_Campus Radio': ['shop', 'radio'],
+      'am_Security Post': ['shop', 'security'], v_dealer: ['shop', 'cars']
+    };
+    function spotById(id) { for (var i = 0; i < SPOTS.length; i++) if (SPOTS[i].id === id) return SPOTS[i]; return null; }
+    function enterVenue(tpl, deco, title, spot, extra) {
+      if (INT || drv) return false;
+      var key = spot ? 'am:' + spot.id : tpl, rk = 'venue:' + key, R0 = INTROOMS[rk]; if (R0) R0.title = title;
+      return enterInterior('venue', Object.assign({ key: key, tpl: tpl, deco: deco, title: title, spot: spot || null, ret: { x: player.x, z: player.z } }, extra || {}));
+    }
+    function enterBuilding(c) {
+      var b = c.b, inf = bInfo(b), nm = inf.name, i, door, hs;
+      if (nm) {
+        door = doorFor(nm); if (door) { useDoor(door); return; }
+        for (i = 0; i < SPOTS.length; i++) if (SPOTS[i].type === 'home' && SPOTS[i].label === nm) { useSpot(SPOTS[i]); return; }
+        if (nm === 'OAU Sports Centre' && spotById('v_sports')) { enterVenue('sports', 'court', 'Sports Complex', spotById('v_sports')); return; }
+      }
+      enterVenue(inf.tpl, '', inf.title, null, { fac: nm ? nm : null, bi: b.bi });
+    }
+    (function () {
+      var _fc = findCandidate;
+      findCandidate = function () {
+        var base = _fc();
+        if (base || drv || INT || lecture || introOpen || DL.on) return base;
+        var b = nearBuilding(); if (!b) return base;
+        var inf = bInfo(b); return { kind: 'bldg', b: b, d: 2, txt: 'Enter ' + inf.title };
+      };
+      var _in = interact;
+      interact = function () {
+        if (!DL.on && !mg && !panelOpen && !INT && !working && !lecture && !drv && cand && cand.kind === 'bldg') { AUD.click(); enterBuilding(cand); return; }
+        return _in();
+      };
+      var _us = useSpot;
+      useSpot = function (s) {
+        if (s.type === 'vspot' && ENTV[s.id] && !INT && !DL.on) { var e = ENTV[s.id]; enterVenue(e[0], e[1], s.label, s); return; }
+        return _us(s);
+      };
+    })();
+
+    // ---------- interiors ----------
+    function floorLines(R, w, d, draw, y) {
+      var m = iplane(R.g, w, d, draw, R.ox, y || 0.02, R.oz, 0); m.rotation.x = -Math.PI / 2; return m;
+    }
+    function venueAct() { var s = INT && INT.opt && INT.opt.spot; if (s && s.fn && !DL.on) s.fn(); }
+    function buildVenue(opt) {
+      var tpl = opt.tpl, deco = opt.deco || '', title = opt.title || 'Building', R, g, ox, oz, i;
+      if (tpl === 'house') {
+        R = newRoom('venue:' + opt.key, 16, 12, 0xd9c7a6, 0xf2e8d0, title); g = R.g; ox = R.ox; oz = R.oz;
+        ib(g, 0xb4452d, ox - 1, 0.02, oz, 6, 0.03, 4);                              // rug
+        prop(R, 0x6d8f5e, ox - R.W / 2 + 2.4, oz - 1.5, 1.4, 4.2, 0.8); prop(R, 0x111111, ox + R.W / 2 - 2.0, oz - 1.6, 0.7, 3, 1.1);
+        prop(R, 0xb98652, ox - 1, oz - 0.2, 2.6, 1.4, 0.55); prop(R, 0xdfe6ee, ox + 2, oz - R.D / 2 + 1.6, 3, 1.5, 0.6);
+        iplane(g, 3, 0.9, drawSign(title, '#7c5a3a'), ox, 3.3, oz - R.D / 2 + 0.32, 0);
+        var fam = npc(R, randomLook(), ox + 1.4, oz - 2.6, 3.4, false); npc(R, randomLook(), ox - R.W / 2 + 2.4, oz - 2.0, 1.57, true);
+        ispot(R, ox + 1.4, oz - 1.6, 'Greet the people inside', function () { openDlg(title, Nd(gistLine(), [C('Ha, true', null), C('Greet and leave', null)]), 6); }, 3);
+        ispot(R, ox - R.W / 2 + 3.8, oz - 1.5, 'Rest on the sofa (30 min, +8 energy)', function () { advanceTime(30); G.energy = Math.min(100, G.energy + 8); show('You rested for half an hour. +8 energy.', 2500); }, 2.8);
+        R.camDist = 24; R.crowd = 0; return R;
+      }
+      if (tpl === 'shop') {
+        var dk = deco, sign = { bank: 'BANK', post: 'POST OFFICE', books: 'BOOKSHOP', cafe: 'CAFETERIA', pharm: 'PHARMACY', salon: 'BARBER & SALON', laundry: 'LAUNDRY', radio: 'CAMPUS RADIO', security: 'SECURITY POST', cars: 'AUTO DEALER' }[dk] || String(title).toUpperCase();
+        R = newRoom('venue:' + opt.key, 16, 11, 0xe3dccd, 0xf6f1e4, title); g = R.g; ox = R.ox; oz = R.oz;
+        var scol = { bank: '#1d4ed8', post: '#15803d', books: '#7c2d12', cafe: '#c2410c', pharm: '#059669', salon: '#a21caf', laundry: '#0891b2', radio: '#be123c', security: '#374151', cars: '#b45309' }[dk] || '#b45309';
+        iplane(g, 4.6, 1.0, drawSign(sign, scol), ox, 3.2, oz - R.D / 2 + 0.32, 0);
+        if (dk === 'cars') { var cc = [0xdc2626, 0x2563eb, 0xfacc15]; for (i = 0; i < 3; i++) { prop(R, cc[i], ox - 4.5 + i * 4.5, oz + 1.8, 3.2, 1.7, 1.0); ib(R.g, 0x93c5fd, ox - 4.5 + i * 4.5, 1.0, oz + 1.8, 1.8, 0.5, 1.5); } }
+        else for (i = 0; i < 3; i++) iplane(g, 3.4, 2.0, drawShelf(i + 3 + (dk.length || 1)), ox - 4.8 + i * 4.8, 1.25, oz - R.D / 2 + 0.34, 0);
+        prop(R, 0x8a5a2b, ox + 1.5, oz - R.D / 2 + 3.6, 6.4, 1.1, 1.0); npc(R, randomLook(), ox + 1.5, oz - R.D / 2 + 2.4, 0, false);
+        if (dk === 'cafe') for (i = 0; i < 2; i++) { prop(R, 0xb98652, ox - 4 + i * 3, oz + 2.2, 1.6, 1.6, 0.7); npc(R, randomLook(), ox - 4 + i * 3, oz + 3.4, Math.PI, true); }
+        ispot(R, ox + 1.5, oz - R.D / 2 + 5.0, opt.spot ? 'Go to the counter: ' + title : 'Buy something', function () {
+          if (opt.spot && INT.opt.spot) { venueAct(); return; }
+          openDlg(title, Nd('"Welcome. What can I get you?"', [
+            C('Sachet water (₦150)', function () { if (G.cash < 150) return Nd('Not enough money.', [C('Ok', null)]); spend('shop', 150); G.hunger = Math.min(100, G.hunger + 5); AUD.coin(); return Nd('Cold water. Small relief.', [C('Ok', null)]); }),
+            C('Biscuits and a drink (₦500)', function () { if (G.cash < 500) return Nd('Not enough money.', [C('Ok', null)]); spend('shop', 500); G.hunger = Math.min(100, G.hunger + 18); G.energy = Math.min(100, G.energy + 4); AUD.coin(); return Nd('Quick snack. +18 hunger.', [C('Ok', null)]); }),
+            C('Just looking', null)]), 5);
+        }, 3.2);
+        R.camDist = 21; R.crowd = 0; return R;
+      }
+      if (tpl === 'hall') {
+        R = newRoom('venue:' + opt.key, 22, 14, 0xcbc5b8, 0xe9e5da, title); g = R.g; ox = R.ox; oz = R.oz;
+        for (i = 0; i < 3; i++) { prop(R, 0x8a5a2b, ox - 6 + i * 6, oz + 2.2, 4.2, 0.8, 0.5); npc(R, randomLook(), ox - 6.8 + i * 6, oz + 2.2, Math.PI, true); npc(R, randomLook(), ox - 5.2 + i * 6, oz + 2.2, Math.PI, true); }
+        for (i = 0; i < 4; i++) { ib(g, 0x6b4a2c, ox - 8 + i * 5.3, 0, oz - R.D / 2 + 0.34, 1.6, 2.6, 0.12); }
+        var fac = opt.fac ? facOf(opt.fac) : null, lines = [String(title).slice(0, 34), fac ? 'Departments: ' + fac.d.slice(0, 3).join(', ') + '...' : 'Notices: fees, timetable, security', 'No loitering. Respect the porters.'];
+        iplane(g, 6, 1.7, drawBoard(lines), ox + 3, 2.1, oz - R.D / 2 + 0.34, 0);
+        iplane(g, 3.6, 0.9, drawSign(String(title).slice(0, 22), '#1e3a5f'), ox - 3, 3.4, oz - R.D / 2 + 0.34, 0);
+        ispot(R, ox + 3, oz - R.D / 2 + 3.2, 'Read the notice board', function () { show(fac ? title + '. Departments: ' + fac.d.join(', ') + '.' : title + ': notices about fees, timetables and a missing flask.', 6500); }, 3);
+        ispot(R, ox - 4, oz + 0.2, 'Ask a student for gist', function () { openDlg('A student', Nd(gistLine(), [C('Ha, true', null)]), 6); }, 3.2);
+        R.camDist = 27; R.crowd = 0.2; return R;
+      }
+      if (tpl === 'sports') {
+        var pool = deco === 'pool', gym = deco === 'gym';
+        R = newRoom('venue:' + opt.key, 30, 20, pool ? 0xbfd7e0 : (gym ? 0x5b5f66 : 0xc9a36a), 0xeef0f2, title); g = R.g; ox = R.ox; oz = R.oz;
+        iplane(g, 5.2, 1.0, drawSign(pool ? 'SWIMMING POOL' : (gym ? 'GYM' : 'SPORTS COMPLEX'), pool ? '#0369a1' : '#15803d'), ox, 3.2, oz - R.D / 2 + 0.32, 0);
+        if (pool) { ib(g, 0x38bdf8, ox, 0.0, oz, 16, 0.12, 8); for (i = 0; i < 4; i++) npc(R, randomLook(), ox - 6 + i * 4, oz - 5.2, 0, false); ib(g, 0xe5e7eb, ox, 0, oz - 4.4, 16.4, 0.18, 0.4); }
+        else if (gym) { for (i = 0; i < 5; i++) { prop(R, 0x111827, ox - 10 + i * 4.5, oz - 5, 1.6, 2.4, 1.1); npc(R, randomLook(), ox - 10 + i * 4.5, oz - 5.2, 0, false); } for (i = 0; i < 3; i++) prop(R, 0x9ca3af, ox - 6 + i * 4, oz + 2, 2.4, 0.5, 0.5); }
+        else {
+          floorLines(R, 22, 12, function (x, w, h) { x.fillStyle = '#c9a36a'; x.fillRect(0, 0, w, h); x.strokeStyle = '#fff'; x.lineWidth = 5; x.strokeRect(6, 6, w - 12, h - 12); x.beginPath(); x.moveTo(w / 2, 6); x.lineTo(w / 2, h - 6); x.stroke(); x.beginPath(); x.arc(w / 2, h / 2, h * 0.16, 0, 6.3); x.stroke(); });
+          prop(R, 0xd1d5db, ox - 12.5, oz, 0.3, 3, 3.2); prop(R, 0xd1d5db, ox + 12.5, oz, 0.3, 3, 3.2);
+          for (i = 0; i < 6; i++) npc(R, randomLook(), ox - 6 + (i % 3) * 5, oz - 2.5 + Math.floor(i / 3) * 5, i % 2 ? 1.57 : -1.57, false);
+          for (i = 0; i < 3; i++) { prop(R, 0x9ca3af, ox - 6 + i * 6, oz - R.D / 2 + 1.4, 5, 1.0, 0.6); npc(R, randomLook(), ox - 6 + i * 6, oz - R.D / 2 + 1.4, 0, true); }
+        }
+        ispot(R, ox - 12, oz + R.D / 2 - 3.6, 'Sports desk', venueAct, 3);
+        ispot(R, ox, oz + 4.5, pool ? 'Swim a few laps (45 min, -12 energy)' : (gym ? 'Work out (1 hr, -15 energy)' : 'Shoot hoops (30 min, -8 energy)'), function () {
+          var ky = 'play' + deco; if (G.flags[ky] === dayOf(G.t)) { show('You already did that today. Your muscles disagree.', 3000); return; }
+          if (G.energy < 20) { show('You are too tired.', 2500); return; }
+          G.flags[ky] = dayOf(G.t); advanceTime(pool ? 45 : (gym ? 60 : 30)); G.energy = Math.max(0, G.energy - (pool ? 12 : (gym ? 15 : 8))); G.hunger = Math.max(0, G.hunger - 8); reward(1, 'Fitness'); show('Good sweat. Aura +1.', 3000); AUD.coin();
+        }, 3.2);
+        R.camDist = 36; R.crowd = 0.25; return R;
+      }
+      if (tpl === 'worship') {
+        var mosque = deco === 'mosque';
+        R = newRoom('venue:' + opt.key, 22, 16, mosque ? 0xcbb892 : 0xd8d2c4, mosque ? 0xf4efe1 : 0xf3f0ea, title); g = R.g; ox = R.ox; oz = R.oz;
+        if (mosque) { ib(g, 0x1d6b4a, ox, 0.02, oz + 1, 16, 0.03, 10); iplane(g, 4.6, 1.1, drawSign('MASJID', '#166534'), ox, 3.3, oz - R.D / 2 + 0.32, 0); ib(g, 0x7a5c2e, ox, 0, oz - R.D / 2 + 1.0, 3, 3.0, 0.5); for (i = 0; i < 8; i++) npc(R, randomLook(), ox - 5.25 + i * 1.5, oz + 0.5 + (i % 2) * 2.2, 3.14, false); }
+        else { iplane(g, 4.6, 1.1, drawSign('CHAPEL', '#6d28d9'), ox, 3.3, oz - R.D / 2 + 0.32, 0); ib(g, 0x8b5a2b, ox, 0, oz - R.D / 2 + 1.6, 6, 0.5, 2); ib(g, 0xf1f5f9, ox, 0.5, oz - R.D / 2 + 0.5, 0.3, 2.6, 0.2); ib(g, 0xf1f5f9, ox, 1.9, oz - R.D / 2 + 0.5, 1.4, 0.3, 0.2);
+          for (i = 0; i < 4; i++) for (var cs = 0; cs < 2; cs++) { prop(R, 0x7b4f2a, ox - 5.4 + cs * 8.4, oz - 1 + i * 2.6, 4.2, 0.9, 0.55); npc(R, randomLook(), ox - 6.2 + cs * 8.4, oz - 1 + i * 2.6, 3.14, true); npc(R, randomLook(), ox - 4.6 + cs * 8.4, oz - 1 + i * 2.6, 3.14, true); } }
+        ispot(R, ox, oz - R.D / 2 + 4.2, mosque ? 'Take a moment for prayer' : 'Take a seat and pray', venueAct, 3.2);
+        R.camDist = 30; R.crowd = 0.12; return R;
+      }
+      // market
+      R = newRoom('venue:' + opt.key, 34, 22, 0x9a8a72, 0xdad2c1, title); g = R.g; ox = R.ox; oz = R.oz;
+      var canop = [0xd9481c, 0x2563eb, 0xf2c230, 0x16a34a, 0xdb2777, 0xf97316];
+      iplane(g, 6, 1.2, drawSign('OAU MARKET', '#b45309'), ox, 3.3, oz - R.D / 2 + 0.32, 0);
+      for (var r2 = 0; r2 < 2; r2++) for (var c2 = 0; c2 < 5; c2++) { var sx = ox - 12 + c2 * 6, sz = oz - 4 + r2 * 8; prop(R, 0x8a5a2b, sx, sz, 3.4, 1.6, 0.9); ib(g, canop[(r2 * 5 + c2) % 6], sx, 2.3, sz, 4.0, 0.15, 2.4); npc(R, randomLook(), sx, sz - 1.4, 0, false); }
+      for (i = 0; i < 8; i++) npc(R, randomLook(), ox - 14 + (i * 3.9) % 28, oz + 1.4 + (i % 2) * 0.8, i % 2 ? 1.2 : -1.2, false);
+      ispot(R, ox, oz + R.D / 2 - 3.6, 'Shop at the market', venueAct, 3.4);
+      R.camDist = 40; R.crowd = 0.3; return R;
+    }
+    (function () {
+      var _br = buildRoom;
+      buildRoom = function (kind, opt) { return kind === 'venue' ? buildVenue(opt) : _br(kind, opt); };
+    })();
+    window.IFE_ENTER = { near: nearBuilding, info: bInfo, enterBuilding: enterBuilding, enterVenue: enterVenue, ENTV: ENTV };
+
+    // =====================================================================================
+    // CURRICULUM: your courses follow your faculty and department.
+    // Each level has 5 courses: one general course (GST, or a project seminar in 500L), one faculty-wide course,
+    // and three departmental courses. Titles are close to real OAU course titles but are NOT the official course list.
+    // Lecture questions come from a quiz bank for your subject area (see QB below). Computer Science and Engineering
+    // keeps the original course list. Edit CUR to correct any title.
+    // =====================================================================================
+    var GSTT = { 1: 'Use of English I', 2: 'Peace and Conflict Studies', 3: 'Entrepreneurship Studies', 4: 'Leadership and Ethics' };
+    // faculty-wide course for each level: [prefix, [100L..500L]]
+    var FCOM = {
+      'Faculty of Technology': ['MTH', ['Elementary Mathematics I', 'Mathematical Methods II', 'Engineering Mathematics III', 'Numerical Methods', 'Operations Research']],
+      'Faculty of Science': ['STA', ['Descriptive Statistics', 'Probability and Distributions', 'Statistical Inference', 'Research Methods in Science', 'Scientific Computing']],
+      'Faculty of Arts': ['ART', ['Introduction to the Humanities', 'African Civilization', 'Nigerian Cultural Studies', 'Research Methods in Arts', 'Ethics and Society']],
+      'Faculty of Law': ['JUR', ['Introduction to Legal Studies', 'Legal Writing and Research', 'Human Rights Law', 'Legal Ethics', 'Advocacy Skills']],
+      'Faculty of Social Sciences': ['SSC', ['Introduction to Social Sciences', 'Social Statistics', 'Research Methods in Social Sciences', 'Social Theory', 'Development Studies']],
+      'Faculty of Education': ['EDU', ['Educational Foundations', 'Introduction to Teaching', 'Educational Measurement', 'Educational Research', 'Issues in Education']],
+      'Faculty of Administration': ['MGT', ['Introduction to Management', 'Business Communication', 'Organizational Studies', 'Business Ethics', 'Management Seminar']],
+      'Faculty of Pharmacy': ['PCH', ['General Chemistry for Pharmacy', 'Physiology for Pharmacy', 'Biochemistry for Pharmacy', 'Pharmacy Law and Ethics', 'Pharmaceutical Seminar']],
+      'Faculty of Agriculture': ['AGR', ['Introduction to Agriculture', 'Agricultural Statistics', 'Farm Practice', 'Agricultural Research Methods', 'Agricultural Seminar']],
+      'Faculty of Environmental Design and Management': ['EDM', ['Introduction to Environmental Studies', 'Environmental Law', 'Design Communication', 'Professional Ethics', 'Research Methods in Built Environment']],
+      'Faculty of Basic Medical Sciences': ['BMS', ['Medical Terminology', 'Medical Ethics', 'Research Methods', 'Biostatistics', 'Medical Seminar']],
+      'Faculty of Clinical Sciences': ['CMS', ['Medical Ethics', 'Basic Life Support', 'Community Health', 'Biostatistics', 'Clinical Seminar']],
+      'Faculty of Dentistry': ['DNT', ['Dental Ethics', 'Medical Terminology', 'Community Dentistry', 'Biostatistics', 'Dental Seminar']]
+    };
+    // department: [prefix, 100L titles, 200L, 300L, 400L, 500L], three titles each, joined with |
+    var CUR = {
+      'Electrical and Electronics Engineering': ['EEE', 'Introduction to Electrical Engineering|Engineering Drawing|Basic Electric Circuits', 'Circuit Theory II|Electromagnetic Fields|Analogue Electronics', 'Digital Electronics|Signals and Systems|Electrical Machines I', 'Power Systems Analysis|Control Systems|Communication Principles', 'Power Electronics|High Voltage Engineering|Final Year Project Design'],
+      'Mechanical Engineering': ['MEE', 'Introduction to Mechanical Engineering|Engineering Drawing|Workshop Practice', 'Thermodynamics I|Strength of Materials|Fluid Mechanics I', 'Heat Transfer|Machine Design|Manufacturing Processes', 'Internal Combustion Engines|Control of Mechanical Systems|Mechanical Vibrations', 'Refrigeration and Air Conditioning|Industrial Management|Final Year Project Design'],
+      'Civil Engineering': ['CVE', 'Introduction to Civil Engineering|Engineering Drawing|Engineering Surveying I', 'Structural Analysis I|Soil Mechanics|Hydraulics', 'Reinforced Concrete Design|Highway Engineering|Geotechnical Engineering', 'Steel Structures|Water Resources Engineering|Construction Management', 'Prestressed Concrete|Foundation Engineering|Final Year Project Design'],
+      'Chemical Engineering': ['CHE', 'Introduction to Chemical Engineering|Engineering Drawing|Basic Chemical Calculations', 'Material and Energy Balances|Chemical Engineering Thermodynamics|Fluid Flow', 'Mass Transfer|Chemical Reaction Engineering|Heat Transfer Operations', 'Process Control|Petroleum Refining|Process Design', 'Plant Design|Biochemical Engineering|Final Year Project Design'],
+      'Materials Science and Engineering': ['MSE', 'Introduction to Materials Science|Engineering Drawing|Workshop Practice', 'Structure of Materials|Thermodynamics of Materials|Mechanical Behaviour of Materials', 'Phase Diagrams|Ceramics Technology|Polymer Science', 'Corrosion and Protection|Metal Processing|Materials Characterization', 'Composite Materials|Failure Analysis|Final Year Project Design'],
+      'Food Science and Technology': ['FST', 'Introduction to Food Science|Food Chemistry I|General Microbiology', 'Food Microbiology|Food Analysis|Unit Operations in Food Processing', 'Food Preservation|Cereal and Legume Technology|Food Quality Assurance', 'Dairy and Meat Technology|Food Engineering|Food Packaging', 'Food Product Development|Food Safety and Regulation|Final Year Project Design'],
+      'Agricultural and Environmental Engineering': ['AGE', 'Introduction to Agricultural Engineering|Engineering Drawing|Workshop Practice', 'Soil and Water Engineering|Farm Power and Machinery|Engineering Surveying', 'Irrigation and Drainage|Farm Structures|Crop Processing Engineering', 'Erosion Control|Renewable Energy for Agriculture|Farm Mechanization', 'Post-Harvest Engineering|Agricultural Engineering Design|Final Year Project Design'],
+      'Mathematics': ['MTH', 'Elementary Mathematics II|Vectors and Geometry|Mathematical Logic', 'Linear Algebra I|Real Analysis I|Mathematical Methods III', 'Complex Analysis|Abstract Algebra|Ordinary Differential Equations', 'Numerical Analysis|Topology|Partial Differential Equations', 'Functional Analysis|Optimization Theory|Final Year Project'],
+      'Physics and Engineering Physics': ['PHY', 'General Physics I|Mechanics and Properties of Matter|Basic Electricity', 'Thermal Physics|Waves and Optics|Mathematical Methods for Physics', 'Electromagnetism|Quantum Mechanics I|Classical Mechanics', 'Solid State Physics|Nuclear Physics|Atmospheric Physics', 'Statistical Mechanics|Electronics and Instrumentation|Final Year Project'],
+      'Chemistry': ['CHM', 'General Chemistry I|Introductory Organic Chemistry|Introductory Physical Chemistry', 'Inorganic Chemistry I|Organic Reaction Mechanisms|Chemical Thermodynamics', 'Spectroscopy|Coordination Chemistry|Chemical Kinetics', 'Polymer Chemistry|Analytical Chemistry|Environmental Chemistry', 'Industrial Chemistry|Advanced Organic Synthesis|Final Year Project'],
+      'Botany': ['BOT', 'General Botany|Plant Diversity|Introductory Ecology', 'Plant Anatomy|Plant Physiology|Mycology', 'Plant Taxonomy|Genetics|Phycology', 'Plant Pathology|Plant Biotechnology|Ecology of Tropical Plants', 'Plant Breeding|Environmental Botany|Final Year Project'],
+      'Zoology': ['ZOO', 'General Zoology|Animal Diversity|Cell Biology', 'Invertebrate Zoology|Vertebrate Zoology|Animal Physiology', 'Entomology|Parasitology|Animal Ecology', 'Fisheries Biology|Animal Behaviour|Developmental Biology', 'Wildlife Management|Conservation Biology|Final Year Project'],
+      'Microbiology': ['MCB', 'Introductory Microbiology|General Biology|Cell Biology', 'Bacteriology|Microbial Physiology|Virology', 'Immunology|Medical Microbiology|Microbial Genetics', 'Industrial Microbiology|Environmental Microbiology|Food Microbiology', 'Biotechnology|Public Health Microbiology|Final Year Project'],
+      'Geology': ['GLY', 'Introduction to Geology|Physical Geology|Earth Materials', 'Mineralogy|Structural Geology|Palaeontology', 'Sedimentology|Petrology|Geophysics', 'Hydrogeology|Economic Geology|Field Mapping', 'Petroleum Geology|Engineering Geology|Final Year Project'],
+      'English': ['ENG', 'Introduction to Literature|English Grammar|Oral English', 'Poetry|Drama|Introduction to Prose Fiction', 'African Literature|Shakespeare|Literary Criticism', 'Postcolonial Literature|Creative Writing|Nigerian Poetry', 'Modern Literary Theory|Comparative Literature|Final Year Project'],
+      'History': ['HIS', 'Introduction to History|Early African Civilizations|History of Ile-Ife and the Yoruba', 'History of West Africa|Nigeria Before 1900|Historical Methods', 'Colonial Nigeria|Atlantic Slave Trade|Africa and the World Wars', 'Nigeria Since Independence|History of International Relations|Historiography', 'Economic History of Africa|Oral Tradition|Final Year Project'],
+      'Linguistics and African Languages': ['LAF', 'Introduction to Linguistics|Yoruba Orthography|Phonetics', 'Phonology|Morphology|Yoruba Grammar', 'Syntax|Sociolinguistics|Yoruba Literature', 'Semantics|Applied Linguistics|African Language Policy', 'Discourse Analysis|Psycholinguistics|Final Year Project'],
+      'Foreign Languages': ['FLG', 'Elementary French I|Elementary German|Introduction to Language Learning', 'Intermediate French|French Grammar|French Oral Expression', 'French Literature|Translation I|Advanced Grammar', 'Francophone African Literature|Translation II|Business French', 'Contemporary French Studies|Interpretation|Final Year Project'],
+      'Dramatic Arts': ['DRA', 'Introduction to Theatre|Elements of Acting|Stagecraft', 'African Drama|Directing|Play Analysis', 'Theatre History|Costume and Makeup Design|Playwriting', 'Theatre for Development|Film Studies|Arts Management', 'Dramatic Theory|Advanced Directing|Final Year Production'],
+      'Music': ['MUS', 'Rudiments of Music|African Traditional Music|Aural Training', 'Harmony I|Music History I|Yoruba Drumming', 'Counterpoint|Music Theory|Choral Techniques', 'Ethnomusicology|Orchestration|Music Technology', 'Composition|Music Education|Final Year Recital'],
+      'Religious Studies': ['REL', 'Introduction to Religious Studies|Introduction to Islamic Studies|Introduction to Christianity', 'Old Testament Survey|Yoruba Traditional Religion|Quran and Hadith', 'New Testament Survey|Islamic Jurisprudence|Religion and Society', 'Comparative Religion|Religion and Politics|Ethics', 'Philosophy of Religion|Religion and Conflict|Final Year Project'],
+      'Law': ['LAW', 'Nigerian Legal System|Legal Method|Law of Contract I', 'Law of Tort|Constitutional Law|Criminal Law I', 'Land Law|Law of Evidence|Equity and Trusts', 'Company Law|Jurisprudence|Administrative Law', 'Conflict of Laws|Commercial Law|Moot and Mock Trial'],
+      'Economics': ['ECO', 'Principles of Economics I|Mathematics for Economists|Introduction to Statistics', 'Microeconomic Theory I|Macroeconomic Theory I|Economic History', 'Econometrics I|Public Finance|Development Economics', 'International Economics|Monetary Economics|Project Appraisal', 'Advanced Econometrics|The Nigerian Economy|Final Year Project'],
+      'Political Science': ['POL', 'Introduction to Political Science|Nigerian Government|Introduction to Political Thought', 'Comparative Politics|Public Administration|Political Ideologies', 'International Relations|Political Economy|Research Methods', 'African Politics|Foreign Policy Analysis|Electoral Studies', 'Democracy and Governance|Conflict Studies|Final Year Project'],
+      'Psychology': ['PSY', 'Introduction to Psychology|Biological Bases of Behaviour|Developmental Psychology I', 'Social Psychology|Learning and Memory|Personality Theories', 'Abnormal Psychology|Psychological Testing|Research Methods', 'Counselling Psychology|Industrial Psychology|Health Psychology', 'Clinical Psychology|Community Psychology|Final Year Project'],
+      'Sociology and Anthropology': ['SOC', 'Introduction to Sociology|Introduction to Anthropology|Social Problems', 'Sociological Theory I|Family and Marriage|Social Research Methods', 'Criminology|Urban Sociology|Medical Sociology', 'Rural Sociology|Gender and Society|Population Studies', 'Sociology of Development|Social Policy|Final Year Project'],
+      'Geography': ['GEO', 'Introduction to Geography|Physical Geography|Map Reading', 'Climatology|Geomorphology|Human Geography', 'Remote Sensing|Cartography|Population Geography', 'GIS Applications|Urban Geography|Transport Geography', 'Environmental Management|Regional Planning|Final Year Project'],
+      'International Relations': ['INR', 'Introduction to International Relations|World History since 1900|Nigerian Foreign Policy', 'Theories of International Relations|International Law|International Organizations', 'Diplomacy|Africa in World Politics|International Political Economy', 'Conflict Resolution|Foreign Policy Analysis|Regional Integration', 'Global Security|Peacekeeping|Final Year Project'],
+      'Educational Foundations and Counselling': ['EDF', 'Introduction to Education|History of Education in Nigeria|Educational Psychology I', 'Philosophy of Education|Sociology of Education|Guidance and Counselling I', 'Counselling Techniques|Testing and Measurement|Developmental Psychology', 'Career Counselling|Research Methods|Group Counselling', 'Clinical Counselling|Educational Statistics|Final Year Project'],
+      'Curriculum Studies': ['CUS', 'Introduction to Curriculum Studies|Teaching Practice Orientation|Educational Psychology I', 'Curriculum Development|Instructional Methods|Educational Technology', 'Curriculum Evaluation|Micro-Teaching|Classroom Management', 'Teaching Practice|Curriculum Theory|Research Methods', 'Curriculum Innovation|Educational Policy|Final Year Project'],
+      'Educational Administration and Planning': ['EAP', 'Introduction to Educational Administration|History of Education|Educational Psychology I', 'School Organization|Educational Planning|Educational Finance', 'Supervision of Instruction|School Law|Personnel Management', 'Educational Policy Analysis|School Plant Planning|Research Methods', 'Higher Education Administration|Comparative Education|Final Year Project'],
+      'Arts and Social Science Education': ['ASE', 'Introduction to Arts Education|Foundations of Social Studies|Educational Psychology I', 'Methods of Teaching Social Studies|Nigerian History for Teachers|Educational Technology', 'Curriculum for Social Studies|Micro-Teaching|Civic Education', 'Teaching Practice|Research Methods|Peace Education', 'Issues in Social Studies Education|Educational Evaluation|Final Year Project'],
+      'Science and Technology Education': ['STE', 'Introduction to Science Education|General Physics for Teachers|General Chemistry for Teachers', 'Methods of Teaching Science|Educational Technology|Biology for Teachers', 'Laboratory Management|Micro-Teaching|Science Curriculum', 'Teaching Practice|Research Methods|Computers in Education', 'Issues in Science Education|Educational Evaluation|Final Year Project'],
+      'Accounting': ['ACC', 'Principles of Accounting I|Business Mathematics|Introduction to Business', 'Financial Accounting|Cost Accounting|Business Law', 'Intermediate Accounting|Taxation|Auditing', 'Advanced Financial Accounting|Management Accounting|Public Sector Accounting', 'Forensic Accounting|Corporate Reporting|Final Year Project'],
+      'Business Administration': ['BUS', 'Introduction to Business|Principles of Management|Business Mathematics', 'Organizational Behaviour|Marketing Principles|Business Statistics', 'Human Resource Management|Operations Management|Entrepreneurship Development', 'Strategic Management|Business Finance|International Business', 'Business Policy|Project Management|Final Year Project'],
+      'Public Administration': ['PAD', 'Introduction to Public Administration|Nigerian Government|Principles of Management', 'Administrative Theory|Local Government Administration|Public Policy', 'Public Personnel Administration|Public Finance|Research Methods', 'Development Administration|Comparative Administration|Public Sector Ethics', 'Public Policy Analysis|Administrative Law|Final Year Project'],
+      'Local Government Studies': ['LGS', 'Introduction to Local Government|Nigerian Government|Principles of Management', 'Local Government Finance|Rural Development|Community Development', 'Local Government Law|Planning and Budgeting|Research Methods', 'Local Government and Politics|Urban Management|Public Policy', 'Intergovernmental Relations|Local Government Reform|Final Year Project'],
+      'Pharmacy': ['PHM', 'Introduction to Pharmacy|General Chemistry|Human Anatomy for Pharmacists', 'Pharmaceutical Chemistry I|Physiology I|Pharmaceutical Microbiology', 'Pharmacology I|Pharmaceutics I|Pharmacognosy', 'Clinical Pharmacy|Pharmaceutical Technology|Medicinal Chemistry', 'Pharmacy Practice|Drug Regulatory Affairs|Final Year Project'],
+      'Agricultural Economics and Extension': ['AEE', 'Introduction to Agriculture|Introductory Agricultural Economics|Farm Mathematics', 'Farm Management|Agricultural Marketing|Extension Methods', 'Agricultural Policy|Production Economics|Rural Sociology', 'Agribusiness Management|Agricultural Finance|Project Appraisal', 'Agricultural Development|Farming Systems|Final Year Project'],
+      'Animal Sciences': ['ANS', 'Introduction to Animal Science|Animal Anatomy|Principles of Genetics', 'Animal Nutrition|Animal Physiology|Poultry Production', 'Ruminant Production|Animal Breeding|Pig and Rabbit Production', 'Animal Health|Dairy Science|Meat Science', 'Animal Feed Technology|Wildlife and Aquaculture|Final Year Project'],
+      'Crop Production and Protection': ['CPP', 'Introduction to Crop Science|General Botany|Principles of Genetics', 'Crop Physiology|Soil Fertility|Plant Pathology', 'Cereal Crop Production|Root and Tuber Crops|Weed Science', 'Plant Breeding|Entomology|Horticulture', 'Seed Technology|Post-Harvest Technology|Final Year Project'],
+      'Soil Science and Land Resources': ['SSL', 'Introduction to Soil Science|General Chemistry|Principles of Land Use', 'Soil Physics|Soil Chemistry|Soil Formation', 'Soil Fertility|Soil Microbiology|Soil Survey', 'Soil Conservation|Land Evaluation|Irrigation and Drainage', 'Soil and Water Management|Environmental Soil Science|Final Year Project'],
+      'Architecture': ['ARC', 'Introduction to Architecture|Architectural Design I|Building Construction I', 'Architectural Design II|History of Architecture|Building Services', 'Architectural Design III|Structures for Architects|Climate and Design', 'Urban Design|Professional Practice|Architectural Design IV', 'Thesis Design Project|Architectural Theory|Final Year Project'],
+      'Estate Management': ['EST', 'Introduction to Estate Management|Principles of Economics|Building Technology', 'Valuation I|Property Law|Land Surveying', 'Valuation II|Property Management|Real Estate Finance', 'Facilities Management|Property Development|Rating and Taxation', 'Advanced Valuation|Estate Practice|Final Year Project'],
+      'Urban and Regional Planning': ['URP', 'Introduction to Urban Planning|Planning History|Map Reading', 'Urban Planning Theory|Land Use Planning|Housing Studies', 'Transport Planning|Environmental Planning|GIS for Planners', 'Regional Planning|Urban Design|Planning Law', 'Development Planning|Planning Practice|Final Year Project'],
+      'Building': ['BLD', 'Introduction to Building|Building Drawing|Building Materials', 'Construction Technology I|Structural Mechanics|Site Surveying', 'Building Services|Concrete Technology|Construction Management I', 'Project Management|Cost Control|Building Maintenance', 'Advanced Construction|Contract Administration|Final Year Project'],
+      'Quantity Surveying': ['QSV', 'Introduction to Quantity Surveying|Building Drawing|Building Materials', 'Measurement I|Construction Technology|Building Economics', 'Measurement II|Cost Planning|Contract Law', 'Bills of Quantities|Valuation of Works|Project Cost Management', 'Advanced Cost Management|Arbitration and Dispute Resolution|Final Year Project'],
+      'Anatomy': ['ANA', 'Introduction to Anatomy|General Biology|Medical Chemistry', 'Gross Anatomy I|Histology|Embryology', 'Neuroanatomy|Gross Anatomy II|Cell Biology', 'Applied Anatomy|Radiological Anatomy|Genetics', 'Anatomical Research|Forensic Anatomy|Final Year Project'],
+      'Physiology': ['PHS', 'Introduction to Physiology|General Biology|Medical Physics', 'Cell Physiology|Cardiovascular Physiology|Respiratory Physiology', 'Renal Physiology|Endocrinology|Neurophysiology', 'Exercise Physiology|Reproductive Physiology|Gastrointestinal Physiology', 'Applied Physiology|Clinical Physiology|Final Year Project'],
+      'Medical Biochemistry': ['BCH', 'Introduction to Biochemistry|General Chemistry|General Biology', 'Biomolecules|Enzymology|Metabolism I', 'Metabolism II|Molecular Biology|Nutritional Biochemistry', 'Clinical Biochemistry|Immunochemistry|Biotechnology', 'Toxicology|Advanced Molecular Biology|Final Year Project'],
+      'Medicine and Surgery': ['MED', 'Introduction to Medicine|Medical Chemistry|Medical Physics', 'Anatomy|Physiology|Biochemistry', 'Pathology|Pharmacology|Microbiology', 'Medicine I|Surgery I|Community Health', 'Obstetrics and Gynaecology|Paediatrics|Clinical Rotation'],
+      'Nursing Science': ['NUR', 'Introduction to Nursing|Anatomy for Nurses|Physiology for Nurses', 'Fundamentals of Nursing|Pharmacology for Nurses|Medical-Surgical Nursing I', 'Medical-Surgical Nursing II|Maternal and Child Health Nursing|Community Health Nursing', 'Mental Health Nursing|Paediatric Nursing|Nursing Research', 'Nursing Management|Clinical Nursing Practice|Final Year Project'],
+      'Dentistry': ['DEN', 'Introduction to Dentistry|Dental Anatomy|Medical Chemistry', 'Oral Anatomy|Dental Materials|Oral Physiology', 'Oral Pathology|Dental Pharmacology|Operative Dentistry', 'Periodontology|Oral Surgery|Paediatric Dentistry', 'Prosthodontics|Orthodontics|Clinical Rotation']
+    };
+    // which quiz bank each course prefix draws its lecture and exam questions from
+    var BANKOF = { EEE: 'EEE', MEE: 'MEE', MSE: 'MEE', CVE: 'CVE', BLD: 'ARC', CHE: 'CHE', FST: 'FST', AGE: 'AGR', AEE: 'AGR', ANS: 'AGR', CPP: 'AGR', SSL: 'AGR', AGR: 'AGR', CHM: 'CHM', PCH: 'PHM', PHM: 'PHM',
+      BOT: 'BIO', ZOO: 'BIO', MCB: 'BIO', GLY: 'GLY', ENG: 'ENG', LAF: 'ENG', FLG: 'ENG', HIS: 'HIS', REL: 'HIS', DRA: 'ART', MUS: 'ART', ART: 'ART', LAW: 'LAW', JUR: 'LAW', ECO: 'ECO', SSC: 'ECO', POL: 'POL', INR: 'POL',
+      PSY: 'PSY', SOC: 'PSY', GEO: 'GEO', EDF: 'EDU', CUS: 'EDU', EAP: 'EDU', ASE: 'EDU', STE: 'EDU', EDU: 'EDU', ACC: 'ACC', BUS: 'BUS', PAD: 'BUS', LGS: 'BUS', MGT: 'BUS',
+      ARC: 'ARC', EST: 'ARC', URP: 'ARC', QSV: 'ARC', EDM: 'ARC', ANA: 'ANA', PHS: 'ANA', BMS: 'ANA', BCH: 'BCH', MED: 'MED', NUR: 'MED', DEN: 'MED', CMS: 'MED', DNT: 'MED' };
+    function Q(arr) { return arr.map(function (r) { return { q: r[0], o: [r[1], r[2], r[3], r[4]], a: 0 }; }); }
+    var QBN = {
+      EEE: Q([['What is the SI unit of electrical resistance?', 'Ohm', 'Farad', 'Henry', 'Tesla'], ['Ohm\'s law says V equals?', 'I x R', 'I / R', 'R / I', 'I + R'], ['Which component stores electric charge?', 'Capacitor', 'Resistor', 'Diode', 'Fuse'], ['Nigeria\'s mains supply frequency is?', '50 Hz', '60 Hz', '100 Hz', '25 Hz'], ['Which device lets current flow in one direction only?', 'Diode', 'Capacitor', 'Inductor', 'Resistor'], ['Two 10 ohm resistors in series give?', '20 ohm', '5 ohm', '10 ohm', '100 ohm']]),
+      MEE: Q([['What is the SI unit of power?', 'Watt', 'Joule', 'Newton', 'Pascal'], ['The first law of thermodynamics is about conservation of?', 'Energy', 'Mass only', 'Momentum', 'Charge'], ['Which cycle models a diesel engine?', 'Diesel cycle', 'Otto cycle', 'Rankine cycle', 'Brayton cycle'], ['Stress equals force divided by?', 'Area', 'Length', 'Volume', 'Time'], ['Heat transfer by direct contact is called?', 'Conduction', 'Convection', 'Radiation', 'Evaporation'], ['Pascal\'s principle is about?', 'Pressure in fluids', 'Heat flow', 'Electric charge', 'Gear ratios']]),
+      CVE: Q([['The main binding ingredient of concrete is?', 'Cement', 'Sand', 'Gravel', 'Steel'], ['Plain concrete is strongest in?', 'Compression', 'Tension', 'Bending', 'Shear only'], ['Which instrument is used for levelling in surveying?', 'Dumpy level', 'Vernier caliper', 'Hygrometer', 'Barometer'], ['The unit of stress is?', 'Pascal', 'Newton', 'Joule', 'Watt'], ['Reinforcement in concrete is usually made of?', 'Steel bars', 'Wood', 'Glass', 'Plastic'], ['A beam supported at both ends is called?', 'Simply supported', 'Cantilever', 'Fixed at one end', 'Floating']]),
+      CHE: Q([['What does a catalyst do to a reaction?', 'Speeds it up without being used up', 'Stops it', 'Adds mass to it', 'Cools it'], ['Which operation separates liquids by boiling point?', 'Distillation', 'Filtration', 'Sedimentation', 'Crystallization'], ['The mole is a unit of?', 'Amount of substance', 'Mass', 'Length', 'Time'], ['A pH below 7 means the solution is?', 'Acidic', 'Basic', 'Neutral', 'A salt'], ['Which raw material is refined into petrol?', 'Crude oil', 'Coal', 'Palm oil', 'Natural rubber'], ['Chemical formula of water?', 'H2O', 'CO2', 'NaCl', 'O2']]),
+      FST: Q([['Heating a food to kill most microbes without fully sterilizing it is?', 'Pasteurization', 'Fermentation', 'Freezing', 'Extrusion'], ['What is the main cause of food spoilage?', 'Microorganisms', 'Gravity', 'Sound', 'Magnetism'], ['A lack of which vitamin causes scurvy?', 'Vitamin C', 'Vitamin A', 'Vitamin D', 'Vitamin K'], ['Microbes turning sugars into acids or alcohol is called?', 'Fermentation', 'Distillation', 'Pasteurization', 'Extrusion'], ['Which nutrient is the main body-building nutrient?', 'Protein', 'Fat', 'Water', 'Fibre']]),
+      AGR: Q([['Growing different crops in sequence on the same land is called?', 'Crop rotation', 'Monocropping', 'Mulching', 'Pruning'], ['The N, P and K in NPK fertilizer stand for?', 'Nitrogen, phosphorus, potassium', 'Nickel, platinum, krypton', 'Neon, phosphorus, calcium', 'Nitrogen, protein, keratin'], ['Which soil type is best for most crops?', 'Loam', 'Pure clay', 'Pure sand', 'Gravel'], ['IITA, a famous agricultural research institute, is in which Nigerian city?', 'Ibadan', 'Lagos', 'Abuja', 'Kano'], ['Rearing fish in ponds is called?', 'Aquaculture', 'Apiculture', 'Horticulture', 'Silviculture']]),
+      CHM: Q([['The atomic number of carbon is?', '6', '12', '8', '14'], ['The chemical symbol for sodium is?', 'Na', 'So', 'S', 'Sn'], ['The pH of pure water at 25 degrees C is?', '7', '0', '14', '1'], ['Which gas is a noble gas used in balloons?', 'Helium', 'Oxygen', 'Chlorine', 'Nitrogen'], ['Avogadro\'s number is about?', '6.02 x 10^23', '3.0 x 10^8', '9.8', '1.6 x 10^-19'], ['A bond formed by sharing electrons is?', 'Covalent', 'Ionic', 'Metallic', 'Hydrogen']]),
+      BIO: Q([['The powerhouse of the cell is the?', 'Mitochondrion', 'Nucleus', 'Ribosome', 'Vacuole'], ['The process plants use to make food is?', 'Photosynthesis', 'Respiration', 'Digestion', 'Osmosis'], ['DNA stands for?', 'Deoxyribonucleic acid', 'Dinitrogen acid', 'Dextrose nucleic acid', 'Double nucleic agent'], ['The basic unit of life is the?', 'Cell', 'Atom', 'Organ', 'Tissue'], ['Organisms that make their own food are called?', 'Autotrophs', 'Heterotrophs', 'Parasites', 'Decomposers'], ['Bacteria are?', 'Prokaryotes', 'Eukaryotes', 'Viruses', 'Fungi']]),
+      GLY: Q([['Rocks formed from cooled magma are?', 'Igneous', 'Sedimentary', 'Metamorphic', 'Organic'], ['The scale used for mineral hardness is the?', 'Mohs scale', 'Richter scale', 'Beaufort scale', 'Kelvin scale'], ['The outermost layer of the Earth is the?', 'Crust', 'Mantle', 'Outer core', 'Inner core'], ['Fossils are mostly found in which rocks?', 'Sedimentary', 'Igneous', 'Lava', 'Granite'], ['Marble forms by metamorphism of?', 'Limestone', 'Granite', 'Basalt', 'Sandstone']]),
+      ENG: Q([['Who wrote Things Fall Apart?', 'Chinua Achebe', 'Wole Soyinka', 'Chimamanda Adichie', 'Ben Okri'], ['The first African winner of the Nobel Prize in Literature was?', 'Wole Soyinka', 'Chinua Achebe', 'Nadine Gordimer', 'Naguib Mahfouz'], ['A comparison using like or as is a?', 'Simile', 'Metaphor', 'Irony', 'Hyperbole'], ['The plural of phenomenon is?', 'Phenomena', 'Phenomenons', 'Phenomenas', 'Phenomenae'], ['The study of speech sounds is?', 'Phonetics', 'Syntax', 'Semantics', 'Morphology'], ['The Yoruba language belongs to which family?', 'Niger-Congo', 'Afro-Asiatic', 'Nilo-Saharan', 'Indo-European']]),
+      HIS: Q([['Nigeria became independent in?', '1960', '1957', '1963', '1966'], ['Which city is traditionally the origin of the Yoruba?', 'Ile-Ife', 'Oyo', 'Abeokuta', 'Lagos'], ['Who was Nigeria\'s first Prime Minister?', 'Abubakar Tafawa Balewa', 'Nnamdi Azikiwe', 'Obafemi Awolowo', 'Ahmadu Bello'], ['The Berlin Conference of 1884-85 was mainly about?', 'The partition of Africa', 'Oil prices', 'Independence', 'Railways'], ['Britain abolished the slave trade in?', '1807', '1914', '1960', '1700']]),
+      ART: Q([['Who wrote The Lion and the Jewel?', 'Wole Soyinka', 'Chinua Achebe', 'Ola Rotimi', 'J. P. Clark'], ['Ola Rotimi wrote which play?', 'The Gods Are Not to Blame', 'Things Fall Apart', 'Half of a Yellow Sun', 'Anthills of the Savannah'], ['The Yoruba talking drum is called?', 'Dundun', 'Sekere', 'Agogo', 'Kora'], ['How many lines does a standard musical staff have?', '5', '4', '6', '8'], ['The part of a theatre where the audience sits is the?', 'Auditorium', 'Wings', 'Stage', 'Backstage']]),
+      LAW: Q([['The supreme law of Nigeria is?', 'The Constitution', 'The Criminal Code', 'The Penal Code', 'The Evidence Act'], ['Mens rea means?', 'A guilty mind', 'A guilty act', 'A fair trial', 'A legal duty'], ['The highest court in Nigeria is the?', 'Supreme Court', 'Court of Appeal', 'Federal High Court', 'Magistrate Court'], ['A civil wrong that is not a breach of contract is a?', 'Tort', 'Felony', 'Treason', 'Misdemeanour'], ['Habeas corpus is about?', 'Unlawful detention', 'Property sales', 'Marriage', 'Contracts'], ['The Chief Law Officer of the Federation is the?', 'Attorney-General', 'President', 'Senate President', 'Chief Justice']]),
+      ECO: Q([['Economics is mainly about how society manages?', 'Scarce resources', 'Unlimited resources', 'Only money', 'Only trade'], ['A general rise in prices is called?', 'Inflation', 'Deflation', 'Recession', 'Devaluation'], ['The law of demand says that when price rises, quantity demanded usually?', 'Falls', 'Rises', 'Stays the same', 'Doubles'], ['GDP stands for?', 'Gross Domestic Product', 'General Domestic Profit', 'Gross Dollar Production', 'Global Domestic Price'], ['The central bank of Nigeria is the?', 'CBN', 'NNPC', 'NSE', 'NIMASA']]),
+      POL: Q([['Nigeria operates which system of government?', 'Federal republic', 'Monarchy', 'Theocracy', 'Military junta'], ['Separation of powers divides government into?', 'Executive, legislature, judiciary', 'Army, police, customs', 'Federal and state only', 'Parties and unions'], ['Who wrote The Prince?', 'Machiavelli', 'Plato', 'John Locke', 'Karl Marx'], ['Where is the ECOWAS headquarters?', 'Abuja', 'Accra', 'Dakar', 'Lagos'], ['The United Nations was founded in?', '1945', '1919', '1960', '1990']]),
+      PSY: Q([['The founder of psychoanalysis was?', 'Sigmund Freud', 'Carl Rogers', 'B. F. Skinner', 'Ivan Pavlov'], ['Pavlov\'s famous experiments used?', 'Dogs', 'Rats', 'Monkeys', 'Pigeons'], ['Sociology is the study of?', 'Society and social behaviour', 'Rocks', 'Plants', 'Stars'], ['The lowest level of Maslow\'s hierarchy is?', 'Physiological needs', 'Self-actualization', 'Esteem', 'Belonging'], ['The study of human cultures is called?', 'Anthropology', 'Geology', 'Botany', 'Astronomy']]),
+      GEO: Q([['The longest river in Nigeria is the?', 'Niger', 'Benue', 'Kaduna', 'Ogun'], ['Rainfall is measured with a?', 'Rain gauge', 'Barometer', 'Anemometer', 'Hygrometer'], ['The line at 0 degrees latitude is the?', 'Equator', 'Prime Meridian', 'Tropic of Cancer', 'Arctic Circle'], ['Weather happens mostly in the?', 'Troposphere', 'Stratosphere', 'Mesosphere', 'Exosphere'], ['The Harmattan is a?', 'Dry dusty wind', 'Monsoon rain', 'Cyclone', 'Ocean current']]),
+      EDU: Q([['Who developed the theory of cognitive development in children?', 'Jean Piaget', 'Sigmund Freud', 'Karl Marx', 'Albert Einstein'], ['A lesson plan is?', 'A teacher\'s structured guide for a lesson', 'An exam result', 'A school fee', 'A tax form'], ['Pedagogy means?', 'The science and art of teaching', 'Child feeding', 'School buildings', 'Exam malpractice'], ['UBE in Nigeria stands for?', 'Universal Basic Education', 'United Basic Exams', 'Universal Business Education', 'University Basic Entry'], ['Bloom\'s taxonomy classifies?', 'Learning objectives', 'Blood types', 'Rock types', 'Tax bands']]),
+      ACC: Q([['The accounting equation is?', 'Assets = Liabilities + Equity', 'Assets = Liabilities - Equity', 'Assets = Income - Expenses', 'Assets = Debits only'], ['Double entry means every transaction affects?', 'At least two accounts', 'One account', 'The bank only', 'No account'], ['Profit equals revenue minus?', 'Expenses', 'Assets', 'Equity', 'Cash'], ['A balance sheet shows?', 'Financial position at a date', 'Profit for a year', 'Budgets only', 'Staff list'], ['Depreciation spreads the cost of?', 'Fixed assets', 'Stock', 'Debtors', 'Wages']]),
+      BUS: Q([['SWOT stands for?', 'Strengths, weaknesses, opportunities, threats', 'Sales, wages, orders, taxes', 'Stock, work, output, targets', 'Supply, wants, offers, trade'], ['The four Ps of marketing are product, price, place and?', 'Promotion', 'People', 'Profit', 'Policy'], ['Local government is which tier in Nigeria?', 'Third tier', 'First tier', 'Second tier', 'Fourth tier'], ['Who is known as the father of scientific management?', 'Frederick Taylor', 'Henri Fayol', 'Max Weber', 'Elton Mayo'], ['A company whose owners\' liability is limited is a?', 'Limited liability company', 'Sole proprietorship', 'Partnership', 'Cooperative society']]),
+      PHM: Q([['Which agency regulates drugs and food in Nigeria?', 'NAFDAC', 'NNPC', 'FRSC', 'NUC'], ['Paracetamol is mainly used to relieve?', 'Pain and fever', 'Bacterial infection', 'Malaria', 'Acidity'], ['Penicillin was discovered by?', 'Alexander Fleming', 'Louis Pasteur', 'Robert Koch', 'Edward Jenner'], ['A drug taken under the tongue is called?', 'Sublingual', 'Oral', 'Rectal', 'Topical'], ['Antibiotics treat infections caused by?', 'Bacteria', 'Viruses only', 'Allergies', 'Stress']]),
+      ANA: Q([['How many bones does an adult human have?', '206', '106', '306', '150'], ['The largest organ of the human body is the?', 'Skin', 'Liver', 'Heart', 'Lung'], ['Which vessels carry blood away from the heart?', 'Arteries', 'Veins', 'Capillaries', 'Lymphatics'], ['The human heart has how many chambers?', '4', '2', '3', '5'], ['The functional unit of the kidney is the?', 'Nephron', 'Neuron', 'Alveolus', 'Villus']]),
+      BCH: Q([['Enzymes are mostly?', 'Proteins', 'Lipids', 'Sugars', 'Minerals'], ['Which of these is a DNA base?', 'Adenine', 'Arginine', 'Alanine', 'Aspartate'], ['The main energy currency of the cell is?', 'ATP', 'DNA', 'RNA', 'NaCl'], ['Glucose is a?', 'Monosaccharide', 'Protein', 'Lipid', 'Nucleotide'], ['The building blocks of proteins are?', 'Amino acids', 'Fatty acids', 'Nucleotides', 'Glucose units']]),
+      MED: Q([['A normal adult resting heart rate is about?', '60 to 100 beats per minute', '20 to 40', '120 to 160', 'Over 200'], ['Malaria is spread by the bite of a female?', 'Anopheles mosquito', 'Housefly', 'Tsetse fly', 'Cockroach'], ['Hand hygiene mainly prevents?', 'The spread of infection', 'Fractures', 'Diabetes', 'Hypertension'], ['Blood pressure is measured with a?', 'Sphygmomanometer', 'Thermometer', 'Stethoscope only', 'Otoscope'], ['An adult has how many permanent teeth?', '32', '28', '20', '36']]),
+      ARC: Q([['A drawing of a building seen from above is a?', 'Plan', 'Elevation', 'Section', 'Perspective'], ['Estate management mainly deals with?', 'Property valuation and management', 'Farming', 'Mining', 'Aviation'], ['Planning that guides how land is used is called?', 'Land use planning', 'Crop rotation', 'Budgeting', 'Auditing'], ['Quantity surveyors prepare?', 'Bills of quantities', 'Medical reports', 'Exam scripts', 'Flight plans'], ['A drawing showing the vertical face of a building is an?', 'Elevation', 'Plan', 'Site plan', 'Inventory']])
+    };
+    (function () { for (var p in BANKOF) QB[p] = QBN[BANKOF[p]]; })();
+    // lecturer names for every subject
+    (function () {
+      var pool = ['Prof. Adeleke', 'Dr. Okonkwo', 'Dr. Bello', 'Prof. Ige', 'Dr. Fashola', 'Prof. Adebayo', 'Dr. Nwosu', 'Dr. Salami', 'Prof. Olaniyan', 'Dr. Eze', 'Dr. Abubakar', 'Prof. Oyelaran'];
+      function add(p) { if (!LECTURERS[p]) { var h = 0; for (var i = 0; i < p.length; i++) h = (h * 31 + p.charCodeAt(i)) % 997; LECTURERS[p] = pool[h % pool.length]; } }
+      for (var p in BANKOF) add(p);
+      for (var d in CUR) add(CUR[d][0]);
+    })();
+    var CCACHE = {};
+    function deptKey() { return (G.flags.dept || '') + '|' + (G.flags.fac || '') + '|' + levelOf2(); }
+    function curCourses(lv) {
+      var dn = G.flags.dept, cd = CUR[dn], fac = myFac();
+      if (!cd || !fac) return LEVEL_COURSES[lv];
+      var key = deptKey(); if (CCACHE[key]) return CCACHE[key];
+      var li = lv / 100, P = cd[0], T = cd[li].split('|'), fc = FCOM[fac.n] || FCOM['Faculty of Science'], base = LEVEL_COURSES[lv];
+      var dv = LM[fac.lm] ? fac.lm : 'Faculty of Technology';
+      function slot(i, code, title, venue) { var b = base[i]; return { code: code, title: title, venue: venue, days: b.days.slice(), h: b.h, len: b.len }; }
+      var out = [
+        li < 5 ? slot(0, 'GST ' + li + '01', GSTT[li], 'Amphi Theatre') : slot(0, P + ' 599', 'Project Seminar', 'Amphi Theatre'),
+        slot(1, fc[0] + ' ' + li + '11', fc[1][li - 1], '1000 Seater Lecture Theatre'),
+        slot(2, P + ' ' + li + '01', T[0], dv), slot(3, P + ' ' + li + '03', T[1], dv), slot(4, P + ' ' + li + '05', T[2], dv)
+      ];
+      CCACHE[key] = out; return out;
+    }
+    applyLevel = function () {
+      var lv = levelOf2(), set = curCourses(lv); COURSES.length = 0; set.forEach(function (c) { COURSES.push(c); });
+      for (var k in LEVEL_TOPICS) TOPICS[k] = LEVEL_TOPICS[k];
+      set.forEach(function (c) { if (!TOPICS[c.code]) TOPICS[c.code] = c.title.toLowerCase(); });
+    };
+    (function () {
+      var _da = deptApply;
+      deptApply = function () {
+        _da(); applyLevel();
+        var f = myFac(); ORIENT.forEach(function (o) { if (o.id === 'reg') o.where = f && LM[f.lm] ? f.lm : 'Faculty of Technology'; });
+      };
+      // every faculty has its own registration desk; you can only register at your own faculty
+      FACULTIES.forEach(function (f) {
+        if (!LM[f.lm] || f.n === 'Faculty of Technology') return;
+        var o0 = ORIENT.filter(function (q) { return q.id === 'reg'; })[0], o = Object.assign({}, o0, { where: f.lm, fac: f.n }), q = findOpen(LM[f.lm][0] + 14, LM[f.lm][1] + 14, 2, 60, 2);
+        var s = { id: 't_reg_' + f.n, type: 'task', label: 'Course registration: ' + f.n.replace('Faculty of ', ''), sub: 'Freshers only', action: 'Sign', color: 0xa855f7, x: q[0], z: q[1], task: o, pin: '📝' }; SPOTS.push(s); spotVisual(s);
+      });
+      ORIENT.filter(function (q) { return q.id === 'reg'; })[0].fac = 'Faculty of Technology';
+      var _td = taskDialog;
+      taskDialog = function (o) {
+        if (o.id === 'reg' && G.level === 100 && o.fac && G.flags.fac && o.fac !== G.flags.fac) { say(o.where, 'This is the ' + o.fac + ' office. You belong to the ' + G.flags.fac + '. Register there.', 3); return; }
+        return _td(o);
+      };
+    })();
+    applyLevel();
+    window.IFE_CURRIC = { CUR: CUR, FCOM: FCOM, QBN: QBN, BANKOF: BANKOF, courses: curCourses };
 
     // =====================================================================================
     // HOME SCREEN: title page shown on every load (phone and desktop). Play / Continue,
